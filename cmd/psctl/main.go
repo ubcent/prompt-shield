@@ -21,6 +21,7 @@ import (
 	"promptshield/internal/config"
 	"promptshield/internal/policy"
 	"promptshield/internal/proxy"
+	"promptshield/internal/proxy/mitm"
 )
 
 func main() {
@@ -39,6 +40,8 @@ func main() {
 		err = status()
 	case "logs":
 		err = logs()
+	case "ca":
+		err = ca(flag.Args()[1:])
 	default:
 		usage()
 		os.Exit(1)
@@ -50,7 +53,7 @@ func main() {
 }
 
 func usage() {
-	fmt.Println("Usage: psctl [start|status|logs]")
+	fmt.Println("Usage: psctl [start|status|logs|ca init]")
 }
 
 func loadConfig() (config.Config, error) {
@@ -73,7 +76,7 @@ func startDaemon() error {
 	if err != nil {
 		return err
 	}
-	server := proxy.New(fmt.Sprintf("127.0.0.1:%d", cfg.Port), policy.NewRuleEngine(cfg.Rules), classifier.HostClassifier{}, logger)
+	server := proxy.New(fmt.Sprintf("127.0.0.1:%d", cfg.Port), policy.NewRuleEngine(cfg.Rules), classifier.HostClassifier{}, logger, cfg.MITM)
 
 	errCh := make(chan error, 1)
 	go func() { errCh <- server.Start() }()
@@ -133,6 +136,22 @@ func logs() error {
 	for _, line := range lines {
 		fmt.Println(line)
 	}
+	return nil
+}
+
+func ca(args []string) error {
+	if len(args) == 0 || args[0] != "init" {
+		return fmt.Errorf("usage: psctl ca init")
+	}
+	path, err := mitm.DefaultCAPath()
+	if err != nil {
+		return err
+	}
+	store := mitm.NewCAStore(path)
+	if err := store.EnsureRootCA(); err != nil {
+		return err
+	}
+	fmt.Printf("Root CA ready at %s\n", path)
 	return nil
 }
 

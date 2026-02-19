@@ -14,7 +14,9 @@ import (
 
 	"promptshield/internal/audit"
 	"promptshield/internal/classifier"
+	"promptshield/internal/config"
 	"promptshield/internal/policy"
+	"promptshield/internal/proxy/mitm"
 )
 
 type Server interface {
@@ -28,14 +30,26 @@ type Proxy struct {
 	policy     policy.Engine
 	classifier classifier.Classifier
 	audit      audit.Logger
+	mitm       *mitm.Handler
+	mitmCfg    config.MITM
 }
 
-func New(addr string, p policy.Engine, c classifier.Classifier, a audit.Logger) *Proxy {
+func New(addr string, p policy.Engine, c classifier.Classifier, a audit.Logger, mitmCfg config.MITM) *Proxy {
+	transport := &http.Transport{Proxy: http.ProxyFromEnvironment}
 	pr := &Proxy{
-		transport:  &http.Transport{Proxy: http.ProxyFromEnvironment},
+		transport:  transport,
 		policy:     p,
 		classifier: c,
 		audit:      a,
+		mitmCfg:    mitmCfg,
+	}
+	if mitmCfg.Enabled {
+		baseDir, err := mitm.DefaultCAPath()
+		if err != nil {
+			log.Printf("mitm disabled: cannot resolve CA path: %v", err)
+		} else {
+			pr.mitm = mitm.NewHandler(mitm.NewCAStore(baseDir), transport, p, c, a, mitm.PassthroughInspector{})
+		}
 	}
 	mux := http.NewServeMux()
 	mux.HandleFunc("/", pr.handle)
@@ -65,13 +79,7 @@ func (p *Proxy) handle(w http.ResponseWriter, r *http.Request) {
 	_ = p.classifier.Classify(host)
 	decision := p.policy.Evaluate(host)
 
-	entry := audit.Entry{
-		Method:   r.Method,
-		Host:     host,
-		Path:     r.URL.Path,
-		Decision: string(decision.Decision),
-		Reason:   fmt.Sprintf("%s (%s)", decision.Reason, decision.RuleID),
-	}
+	entry := audit.Entry{Method: r.Method, Host: host, Path: r.URL.Path, Decision: string(decision.Decision), Reason: fmt.Sprintf("%s (%s)", decision.Reason, decision.RuleID)}
 	defer func() {
 		if err := p.audit.Log(entry); err != nil {
 			log.Printf("audit log error: %v", err)
@@ -84,7 +92,7 @@ func (p *Proxy) handle(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if r.Method == http.MethodConnect {
-		p.handleConnect(w, r)
+		p.handleConnect(w, r, decision)
 		return
 	}
 	p.handleHTTP(w, r)
@@ -112,32 +120,53 @@ func (p *Proxy) handleHTTP(w http.ResponseWriter, r *http.Request) {
 	_, _ = io.Copy(w, resp.Body)
 }
 
-func (p *Proxy) handleConnect(w http.ResponseWriter, r *http.Request) {
-	dstConn, err := net.DialTimeout("tcp", r.Host, 10*time.Second)
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusServiceUnavailable)
-		return
-	}
-
+func (p *Proxy) handleConnect(w http.ResponseWriter, r *http.Request, decision policy.Result) {
 	hj, ok := w.(http.Hijacker)
 	if !ok {
-		dstConn.Close()
 		http.Error(w, "hijacking not supported", http.StatusInternalServerError)
 		return
 	}
 	clientConn, _, err := hj.Hijack()
 	if err != nil {
-		dstConn.Close()
 		return
 	}
 
 	_, _ = clientConn.Write([]byte("HTTP/1.1 200 Connection Established\r\n\r\n"))
+	if p.shouldMITM(r.Host, decision) {
+		p.mitm.HandleMITM(clientConn, r.Host)
+		return
+	}
+
+	dstConn, err := net.DialTimeout("tcp", r.Host, 10*time.Second)
+	if err != nil {
+		_ = clientConn.Close()
+		return
+	}
 
 	var wg sync.WaitGroup
 	wg.Add(2)
 	go tunnel(&wg, dstConn, clientConn)
 	go tunnel(&wg, clientConn, dstConn)
 	wg.Wait()
+}
+
+func (p *Proxy) shouldMITM(host string, decision policy.Result) bool {
+	if p.mitm == nil || !p.mitmCfg.Enabled {
+		return false
+	}
+	if decision.Decision != policy.MITM {
+		return false
+	}
+	if len(p.mitmCfg.Domains) == 0 {
+		return true
+	}
+	needle := strings.ToLower(hostOnly(host))
+	for _, domain := range p.mitmCfg.Domains {
+		if strings.EqualFold(strings.TrimSpace(domain), needle) {
+			return true
+		}
+	}
+	return false
 }
 
 func tunnel(wg *sync.WaitGroup, dst net.Conn, src net.Conn) {
