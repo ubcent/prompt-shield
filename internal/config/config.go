@@ -28,10 +28,11 @@ type Rule struct {
 }
 
 type Config struct {
-	Port    int    `json:"port"`
-	LogFile string `json:"log_file"`
-	MITM    MITM   `json:"mitm"`
-	Rules   []Rule `json:"rules"`
+	Port      int       `json:"port"`
+	LogFile   string    `json:"log_file"`
+	MITM      MITM      `json:"mitm"`
+	Sanitizer Sanitizer `json:"sanitizer"`
+	Rules     []Rule    `json:"rules"`
 }
 
 type MITM struct {
@@ -39,11 +40,19 @@ type MITM struct {
 	Domains []string `json:"domains"`
 }
 
+type Sanitizer struct {
+	Enabled             bool     `json:"enabled"`
+	Types               []string `json:"types"`
+	ConfidenceThreshold float64  `json:"confidence_threshold"`
+	MaxReplacements     int      `json:"max_replacements"`
+}
+
 func Default() Config {
 	return Config{
-		Port:    defaultPort,
-		LogFile: defaultLogFile,
-		MITM:    MITM{},
+		Port:      defaultPort,
+		LogFile:   defaultLogFile,
+		MITM:      MITM{},
+		Sanitizer: Sanitizer{Types: []string{"email", "phone", "api_key", "jwt"}},
 		Rules: []Rule{{
 			ID:     "allow_all",
 			Action: "allow",
@@ -114,6 +123,8 @@ func parseYAMLLite(r *strings.Reader, cfg *Config) error {
 	inMatch := false
 	inMITM := false
 	inMITMDomains := false
+	inSanitizer := false
+	inSanitizerTypes := false
 
 	for s.Scan() {
 		line := strings.TrimSpace(s.Text())
@@ -125,15 +136,29 @@ func parseYAMLLite(r *strings.Reader, cfg *Config) error {
 
 		switch {
 		case line == "rules:":
+			inSanitizer = false
+			inSanitizerTypes = false
 			inMITMDomains = false
 			inMITM = false
 			continue
 		case line == "mitm:":
+			inSanitizer = false
+			inSanitizerTypes = false
 			inMITM = true
 			inMITMDomains = false
 			continue
+		case line == "sanitizer:":
+			inMITM = false
+			inMITMDomains = false
+			inSanitizer = true
+			inSanitizerTypes = false
+			continue
 		case line == "domains:" && inMITM:
 			inMITMDomains = true
+			continue
+		case line == "types:" && inSanitizer:
+			cfg.Sanitizer.Types = nil
+			inSanitizerTypes = true
 			continue
 		case inMITMDomains && strings.HasPrefix(strings.TrimSpace(s.Text()), "-"):
 			domain := strings.TrimSpace(strings.TrimLeft(strings.TrimSpace(s.Text()), "-"))
@@ -141,8 +166,15 @@ func parseYAMLLite(r *strings.Reader, cfg *Config) error {
 				cfg.MITM.Domains = append(cfg.MITM.Domains, domain)
 			}
 			continue
+		case inSanitizerTypes && strings.HasPrefix(strings.TrimSpace(s.Text()), "-"):
+			typ := strings.TrimSpace(strings.TrimLeft(strings.TrimSpace(s.Text()), "-"))
+			if typ != "" {
+				cfg.Sanitizer.Types = append(cfg.Sanitizer.Types, typ)
+			}
+			continue
 		case strings.HasPrefix(line, "port:"):
 			inMITMDomains = false
+			inSanitizerTypes = false
 			v := strings.TrimSpace(strings.TrimPrefix(line, "port:"))
 			port, err := strconv.Atoi(v)
 			if err != nil {
@@ -151,12 +183,31 @@ func parseYAMLLite(r *strings.Reader, cfg *Config) error {
 			cfg.Port = port
 		case strings.HasPrefix(line, "log_file:"):
 			inMITMDomains = false
+			inSanitizerTypes = false
 			cfg.LogFile = strings.TrimSpace(strings.TrimPrefix(line, "log_file:"))
 		case strings.HasPrefix(line, "enabled:") && inMITM:
 			inMITMDomains = false
 			cfg.MITM.Enabled = strings.EqualFold(strings.TrimSpace(strings.TrimPrefix(line, "enabled:")), "true")
+		case strings.HasPrefix(line, "enabled:") && inSanitizer:
+			cfg.Sanitizer.Enabled = strings.EqualFold(strings.TrimSpace(strings.TrimPrefix(line, "enabled:")), "true")
+		case strings.HasPrefix(line, "confidence_threshold:") && inSanitizer:
+			v := strings.TrimSpace(strings.TrimPrefix(line, "confidence_threshold:"))
+			threshold, err := strconv.ParseFloat(v, 64)
+			if err != nil {
+				return fmt.Errorf("invalid confidence_threshold: %s", v)
+			}
+			cfg.Sanitizer.ConfidenceThreshold = threshold
+		case strings.HasPrefix(line, "max_replacements:") && inSanitizer:
+			v := strings.TrimSpace(strings.TrimPrefix(line, "max_replacements:"))
+			maxRepl, err := strconv.Atoi(v)
+			if err != nil {
+				return fmt.Errorf("invalid max_replacements: %s", v)
+			}
+			cfg.Sanitizer.MaxReplacements = maxRepl
 		case strings.HasPrefix(line, "id:"):
 			inMITMDomains = false
+			inSanitizer = false
+			inSanitizerTypes = false
 			inMITM = false
 			cfg.Rules = append(cfg.Rules, Rule{})
 			currentRule = &cfg.Rules[len(cfg.Rules)-1]

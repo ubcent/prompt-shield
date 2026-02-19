@@ -17,6 +17,7 @@ import (
 	"promptshield/internal/config"
 	"promptshield/internal/policy"
 	"promptshield/internal/proxy/mitm"
+	"promptshield/internal/sanitizer"
 )
 
 type Server interface {
@@ -34,7 +35,7 @@ type Proxy struct {
 	mitmCfg    config.MITM
 }
 
-func New(addr string, p policy.Engine, c classifier.Classifier, a audit.Logger, mitmCfg config.MITM) *Proxy {
+func New(addr string, p policy.Engine, c classifier.Classifier, a audit.Logger, mitmCfg config.MITM, sanitizerCfg config.Sanitizer) *Proxy {
 	transport := &http.Transport{Proxy: http.ProxyFromEnvironment}
 	pr := &Proxy{
 		transport:  transport,
@@ -48,7 +49,13 @@ func New(addr string, p policy.Engine, c classifier.Classifier, a audit.Logger, 
 		if err != nil {
 			log.Printf("mitm disabled: cannot resolve CA path: %v", err)
 		} else {
-			pr.mitm = mitm.NewHandler(mitm.NewCAStore(baseDir), transport, p, c, a, mitm.PassthroughInspector{})
+			inspector := mitm.Inspector(mitm.PassthroughInspector{})
+			if sanitizerCfg.Enabled {
+				detectors := sanitizer.DetectorsByName(sanitizerCfg.Types)
+				s := sanitizer.New(detectors).WithConfidenceThreshold(sanitizerCfg.ConfidenceThreshold).WithMaxReplacements(sanitizerCfg.MaxReplacements)
+				inspector = sanitizer.NewSanitizingInspector(s)
+			}
+			pr.mitm = mitm.NewHandler(mitm.NewCAStore(baseDir), transport, p, c, a, inspector)
 		}
 	}
 	mux := http.NewServeMux()

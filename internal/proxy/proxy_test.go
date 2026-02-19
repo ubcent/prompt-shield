@@ -21,6 +21,7 @@ import (
 	"promptshield/internal/config"
 	"promptshield/internal/policy"
 	"promptshield/internal/proxy/mitm"
+	"promptshield/internal/sanitizer"
 )
 
 type memoryAudit struct {
@@ -43,12 +44,17 @@ func (m *memoryAudit) all() []audit.Entry {
 	return out
 }
 
-func newTestProxy(t *testing.T, p policy.Engine, logger audit.Logger, mitmCfg config.MITM, caDir string) (*Proxy, *httptest.Server) {
+func newTestProxy(t *testing.T, p policy.Engine, logger audit.Logger, mitmCfg config.MITM, sanitizerCfg config.Sanitizer, caDir string) (*Proxy, *httptest.Server) {
 	t.Helper()
 	transport := &http.Transport{Proxy: nil, TLSClientConfig: &tls.Config{InsecureSkipVerify: true}}
 	pr := &Proxy{transport: transport, policy: p, classifier: classifier.HostClassifier{}, audit: logger, mitmCfg: mitmCfg}
 	if mitmCfg.Enabled {
-		pr.mitm = mitm.NewHandler(mitm.NewCAStore(caDir), transport, p, classifier.HostClassifier{}, logger, mitm.PassthroughInspector{})
+		inspector := mitm.Inspector(mitm.PassthroughInspector{})
+		if sanitizerCfg.Enabled {
+			s := sanitizer.New(sanitizer.DetectorsByName(sanitizerCfg.Types))
+			inspector = sanitizer.NewSanitizingInspector(s)
+		}
+		pr.mitm = mitm.NewHandler(mitm.NewCAStore(caDir), transport, p, classifier.HostClassifier{}, logger, inspector)
 	}
 	server := httptest.NewServer(http.HandlerFunc(pr.handle))
 	return pr, server
@@ -72,7 +78,7 @@ func TestProxyAllowScenario(t *testing.T) {
 	defer upstream.Close()
 
 	auditLog := &memoryAudit{}
-	_, proxySrv := newTestProxy(t, policy.NewRuleEngine(nil), auditLog, config.MITM{}, t.TempDir())
+	_, proxySrv := newTestProxy(t, policy.NewRuleEngine(nil), auditLog, config.MITM{}, config.Sanitizer{}, t.TempDir())
 	defer proxySrv.Close()
 
 	client := proxyClient(proxySrv.URL, nil)
@@ -101,7 +107,7 @@ func TestProxyBlockScenario(t *testing.T) {
 	defer upstream.Close()
 
 	rules := []config.Rule{{ID: "block-target", Match: config.Match{HostContains: "127.0.0.1"}, Action: "block"}}
-	_, proxySrv := newTestProxy(t, policy.NewRuleEngine(rules), &memoryAudit{}, config.MITM{}, t.TempDir())
+	_, proxySrv := newTestProxy(t, policy.NewRuleEngine(rules), &memoryAudit{}, config.MITM{}, config.Sanitizer{}, t.TempDir())
 	defer proxySrv.Close()
 
 	resp, err := proxyClient(proxySrv.URL, nil).Get(upstream.URL + "/blocked")
@@ -116,7 +122,7 @@ func TestProxyBlockScenario(t *testing.T) {
 }
 
 func TestProxyShouldMITMDecision(t *testing.T) {
-	pr, _ := newTestProxy(t, policy.NewRuleEngine(nil), &memoryAudit{}, config.MITM{Enabled: true, Domains: []string{"localhost"}}, t.TempDir())
+	pr, _ := newTestProxy(t, policy.NewRuleEngine(nil), &memoryAudit{}, config.MITM{Enabled: true, Domains: []string{"localhost"}}, config.Sanitizer{}, t.TempDir())
 	if !pr.shouldMITM("localhost:443", policy.Result{Decision: policy.MITM}) {
 		t.Fatalf("expected MITM for configured domain")
 	}
@@ -136,7 +142,7 @@ func TestProxyAuditLoggingJSON(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewJSONLLogger() error = %v", err)
 	}
-	_, proxySrv := newTestProxy(t, policy.NewRuleEngine(nil), logger, config.MITM{}, t.TempDir())
+	_, proxySrv := newTestProxy(t, policy.NewRuleEngine(nil), logger, config.MITM{}, config.Sanitizer{}, t.TempDir())
 	defer proxySrv.Close()
 
 	resp, err := proxyClient(proxySrv.URL, nil).Get(upstream.URL + "/audit")
