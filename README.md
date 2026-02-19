@@ -1,127 +1,205 @@
 # PromptShield
 
-PromptShield is a local security agent for AI/LLM traffic. This MVP provides:
+PromptShield is a local security agent for AI/LLM traffic with:
 
-- local forward proxy (HTTP + HTTPS CONNECT tunnel)
-- request classifier (OpenAI / Anthropic / Unknown)
-- policy engine (allow / block by host)
+- local HTTP/HTTPS proxy
+- selective MITM interception
+- policy engine (allow/block/mitm)
+- request/response sanitizer
 - JSONL audit logging
-- daemon (`psd`) and CLI (`psctl`)
 
-## Project layout
+## 🚀 Quick Start
 
-```text
-promptshield/
-  cmd/
-    psd/        # daemon
-    psctl/      # CLI
-  internal/
-    proxy/      # HTTP/HTTPS proxy
-    policy/     # rules engine
-    audit/      # logging
-    classifier/ # AI/LLM service classifier
-    config/     # config loading
-  pkg/
+### 1. Установка
+
+```bash
+git clone <repo-url>
+cd promptshield
+go build ./cmd/psd
+go build ./cmd/psctl
 ```
 
-## Configuration
+### 2. Генерация root CA
 
-Config file path: `~/.promptshield/config.yaml`
+```bash
+./psctl ca init
+```
 
-Example:
+### 3. Установка сертификата (macOS)
+
+```bash
+open ~/.promptshield/ca/cert.pem
+```
+
+Дальше:
+
+- добавить сертификат в Keychain
+- выбрать сертификат и установить Trust = **Always Trust**
+
+### 4. Запуск proxy
+
+```bash
+./psctl start
+```
+
+По умолчанию proxy доступен на:
+
+```text
+http://localhost:8080
+```
+
+При запуске `psctl start` выводит:
+
+```text
+PromptShield started
+Proxy: http://localhost:8080
+MITM: enabled|disabled
+Sanitizer: enabled|disabled
+Log file: ~/.promptshield/audit.log
+```
+
+### 5. Настройка proxy
+
+#### Временная (через env)
+
+```bash
+export HTTP_PROXY=http://localhost:8080
+export HTTPS_PROXY=http://localhost:8080
+```
+
+#### Или в браузере
+
+- System Settings → Network → Proxy
+
+### 6. Проверка (без MITM)
+
+```bash
+curl -x http://localhost:8080 https://example.com
+```
+
+### 7. Проверка MITM
+
+```bash
+curl -x http://localhost:8080 https://api.openai.com -k
+```
+
+Ожидается:
+
+- proxy видит HTTP-запрос после расшифровки TLS
+- запрос попадает в audit log
+
+### 8. Проверка sanitizer
+
+```bash
+curl -x http://localhost:8080 https://example.com \
+  -d '{"email":"test@example.com"}'
+```
+
+Ожидается:
+
+- email маскируется sanitizer-ом
+- в audit появляется `sanitized_items`
+
+### 9. Просмотр логов
+
+```bash
+./psctl logs
+```
+
+## 🧪 Demo scenario
+
+1. Включите правило block для `openai.com` в `~/.promptshield/config.yaml`:
 
 ```yaml
-port: 8080
-log_file: ~/.promptshield/audit.log
 rules:
   - id: block-openai
     match:
       host_contains: openai.com
     action: block
-  - id: mitm-openai
-    match:
-      host: api.openai.com
-    action: mitm
+```
+
+2. Выполните запрос:
+
+```bash
+curl -x http://localhost:8080 https://api.openai.com
+```
+
+3. Ожидайте ответ `403` от proxy.
+
+## ⚙️ Config example
+
+```yaml
+port: 8080
+log_file: ~/.promptshield/audit.log
+
 mitm:
   enabled: true
   domains:
     - api.openai.com
-    - chat.openai.com
+    - example.com
+
+sanitizer:
+  enabled: true
+
+rules:
+  - id: block-openai
+    match:
+      host_contains: openai.com
+    action: block
 ```
 
-If no config exists, defaults are used:
+Config path: `~/.promptshield/config.yaml`.
 
-- port: `8080`
-- log_file: `~/.promptshield/audit.log`
-- rules: allow all
-
-## Run
-
-Start daemon directly:
+## 🧾 CLI
 
 ```bash
-go run ./cmd/psd
+./psctl start
+./psctl status
+./psctl logs
+./psctl ca init
+./psctl ca print
 ```
 
-Or via CLI:
+- `start` — запускает proxy как daemon.
+- `status` — показывает, запущен ли proxy, порт, состояние MITM/sanitizer.
+- `logs` — tail audit log (`~/.promptshield/audit.log`).
+- `ca init` — генерирует root CA в `~/.promptshield/ca/`.
+- `ca print` — печатает путь к сертификату и короткую инструкцию по установке.
+
+## 🛠️ Make targets
 
 ```bash
-go run ./cmd/psctl start
+make build
+make run
+make test
 ```
 
-Check status:
+## 📓 Audit log
+
+- файл: `~/.promptshield/audit.log`
+- создаётся автоматически
+- формат: JSONL (одна JSON запись на строку)
+
+## ⚠️ Troubleshooting
+
+### HTTPS не работает
+
+- проверьте, что root CA установлен
+- проверьте trust settings в системе/браузере
+
+### Proxy не используется
+
+- проверьте `HTTP_PROXY` и `HTTPS_PROXY`
+- проверьте системные proxy-настройки
+
+### MITM не срабатывает
+
+- проверьте `mitm.enabled: true`
+- проверьте `mitm.domains`
+- проверьте, что домен запроса совпадает
+
+### Debug
 
 ```bash
-go run ./cmd/psctl status
+LOG_LEVEL=debug ./psctl start
 ```
-
-Show last audit lines:
-
-```bash
-go run ./cmd/psctl logs
-```
-
-## Use as proxy
-
-Set proxy for a single curl command:
-
-```bash
-curl -x http://127.0.0.1:8080 https://example.com
-```
-
-For HTTP target:
-
-```bash
-curl -x http://127.0.0.1:8080 http://httpbin.org/get
-```
-
-## Audit log format
-
-Audit log is JSONL (`~/.promptshield/audit.log`) with fields:
-
-- `timestamp`
-- `method`
-- `host`
-- `path`
-- `decision` (`allow`/`block`)
-- `reason`
-
-## Notes
-
-- HTTPS defaults to CONNECT tunneling and can selectively enable MITM interception by policy/config.
-- MITM internals live in `internal/proxy/mitm` and are isolated from the default tunnel pipeline.
-- Daemon supports graceful shutdown on SIGINT/SIGTERM.
-
-
-## HTTPS interception
-
-1. Generate root CA:
-
-```bash
-go run ./cmd/psctl ca init
-```
-
-2. Install `~/.promptshield/ca/cert.pem` into your system trust store (for macOS use Keychain Access and trust it).
-3. Start proxy and keep `mitm.enabled: true` with domain/rule selection.
-
-MITM is optional and only activates for CONNECT hosts matching both a `mitm` policy action and configured `mitm.domains`. Other HTTPS traffic stays in plain CONNECT tunnel mode.

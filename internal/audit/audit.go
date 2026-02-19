@@ -40,6 +40,11 @@ func NewJSONLLogger(path string) (*JSONLLogger, error) {
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return nil, fmt.Errorf("create log dir: %w", err)
 	}
+	f, err := os.OpenFile(path, os.O_CREATE, 0o644)
+	if err != nil {
+		return nil, fmt.Errorf("create audit log: %w", err)
+	}
+	_ = f.Close()
 	return &JSONLLogger{path: path}, nil
 }
 

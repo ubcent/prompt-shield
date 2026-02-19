@@ -2,25 +2,20 @@ package main
 
 import (
 	"bufio"
-	"context"
-	"errors"
 	"flag"
 	"fmt"
 	"io"
 	"log"
-	"net"
-	"net/http"
 	"os"
-	"os/signal"
+	"os/exec"
+	"path/filepath"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
 
 	"promptshield/internal/audit"
-	"promptshield/internal/classifier"
 	"promptshield/internal/config"
-	"promptshield/internal/policy"
-	"promptshield/internal/proxy"
 	"promptshield/internal/proxy/mitm"
 )
 
@@ -53,7 +48,7 @@ func main() {
 }
 
 func usage() {
-	fmt.Println("Usage: psctl [start|status|logs|ca init]")
+	fmt.Println("Usage: psctl [start|status|logs|ca init|ca print]")
 }
 
 func loadConfig() (config.Config, error) {
@@ -72,30 +67,50 @@ func startDaemon() error {
 	if err != nil {
 		return err
 	}
-	logger, err := audit.NewJSONLLogger(cfg.LogFile)
+	if _, err := audit.NewJSONLLogger(cfg.LogFile); err != nil {
+		return err
+	}
+
+	running, pid := processStatus()
+	if running {
+		fmt.Printf("PromptShield is already running (pid %d)\n", pid)
+		return nil
+	}
+
+	stdoutLog, err := daemonLogPath()
 	if err != nil {
 		return err
 	}
-	server := proxy.New(fmt.Sprintf("127.0.0.1:%d", cfg.Port), policy.NewRuleEngine(cfg.Rules), classifier.HostClassifier{}, logger, cfg.MITM, cfg.Sanitizer)
-
-	errCh := make(chan error, 1)
-	go func() { errCh <- server.Start() }()
-
-	sigCh := make(chan os.Signal, 1)
-	signal.Notify(sigCh, os.Interrupt, syscall.SIGTERM)
-
-	select {
-	case sig := <-sigCh:
-		fmt.Printf("received %s, shutting down\n", sig)
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
-		return server.Shutdown(ctx)
-	case err := <-errCh:
-		if errors.Is(err, http.ErrServerClosed) {
-			return nil
-		}
+	if err := os.MkdirAll(filepath.Dir(stdoutLog), 0o755); err != nil {
 		return err
 	}
+	lf, err := os.OpenFile(stdoutLog, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644)
+	if err != nil {
+		return err
+	}
+	defer lf.Close()
+
+	cmd, err := daemonCommand()
+	if err != nil {
+		return err
+	}
+	cmd.Stdout = lf
+	cmd.Stderr = lf
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
+	if err := cmd.Start(); err != nil {
+		return err
+	}
+	if err := os.WriteFile(pidFilePath(), []byte(fmt.Sprintf("%d\n", cmd.Process.Pid)), 0o644); err != nil {
+		return err
+	}
+
+	fmt.Println("PromptShield started")
+	fmt.Printf("Proxy: http://localhost:%d\n", cfg.Port)
+	fmt.Printf("MITM: %s\n", enabledLabel(cfg.MITM.Enabled))
+	fmt.Printf("Sanitizer: %s\n", enabledLabel(cfg.Sanitizer.Enabled))
+	fmt.Printf("Config: %s\n", mustConfigPath())
+	fmt.Printf("Log file: %s\n", cfg.LogFile)
+	return nil
 }
 
 func status() error {
@@ -103,14 +118,15 @@ func status() error {
 	if err != nil {
 		return err
 	}
-	addr := fmt.Sprintf("127.0.0.1:%d", cfg.Port)
-	conn, err := net.DialTimeout("tcp", addr, time.Second)
-	if err != nil {
-		fmt.Printf("PromptShield is not running on %s\n", addr)
-		return nil
+	running, pid := processStatus()
+	if !running {
+		fmt.Println("PromptShield is not running")
+	} else {
+		fmt.Printf("PromptShield is running (pid %d)\n", pid)
 	}
-	_ = conn.Close()
-	fmt.Printf("PromptShield is running on %s\n", addr)
+	fmt.Printf("Port: %d\n", cfg.Port)
+	fmt.Printf("MITM: %s\n", enabledLabel(cfg.MITM.Enabled))
+	fmt.Printf("Sanitizer: %s\n", enabledLabel(cfg.Sanitizer.Enabled))
 	return nil
 }
 
@@ -119,12 +135,9 @@ func logs() error {
 	if err != nil {
 		return err
 	}
-	f, err := os.Open(cfg.LogFile)
+
+	f, err := os.OpenFile(cfg.LogFile, os.O_CREATE|os.O_RDONLY, 0o644)
 	if err != nil {
-		if errors.Is(err, os.ErrNotExist) {
-			fmt.Println("audit log does not exist yet")
-			return nil
-		}
 		return err
 	}
 	defer f.Close()
@@ -136,23 +149,134 @@ func logs() error {
 	for _, line := range lines {
 		fmt.Println(line)
 	}
-	return nil
+
+	offset, err := f.Seek(0, io.SeekEnd)
+	if err != nil {
+		return err
+	}
+	for {
+		time.Sleep(500 * time.Millisecond)
+		stat, err := os.Stat(cfg.LogFile)
+		if err != nil {
+			return err
+		}
+		if stat.Size() < offset {
+			offset = 0
+		}
+		if stat.Size() == offset {
+			continue
+		}
+		nf, err := os.Open(cfg.LogFile)
+		if err != nil {
+			return err
+		}
+		if _, err := nf.Seek(offset, io.SeekStart); err != nil {
+			_ = nf.Close()
+			return err
+		}
+		s := bufio.NewScanner(nf)
+		for s.Scan() {
+			line := strings.TrimSpace(s.Text())
+			if line != "" {
+				fmt.Println(line)
+			}
+		}
+		if err := s.Err(); err != nil {
+			_ = nf.Close()
+			return err
+		}
+		offset = stat.Size()
+		_ = nf.Close()
+	}
 }
 
 func ca(args []string) error {
-	if len(args) == 0 || args[0] != "init" {
-		return fmt.Errorf("usage: psctl ca init")
+	if len(args) == 0 {
+		return fmt.Errorf("usage: psctl ca [init|print]")
 	}
 	path, err := mitm.DefaultCAPath()
 	if err != nil {
 		return err
 	}
-	store := mitm.NewCAStore(path)
-	if err := store.EnsureRootCA(); err != nil {
-		return err
+
+	switch args[0] {
+	case "init":
+		store := mitm.NewCAStore(path)
+		if err := store.EnsureRootCA(); err != nil {
+			return err
+		}
+		fmt.Printf("Root CA ready at %s\n", path)
+		fmt.Printf("Certificate: %s\n", filepath.Join(path, "cert.pem"))
+		return nil
+	case "print":
+		certPath := filepath.Join(path, "cert.pem")
+		fmt.Printf("Root CA certificate: %s\n", certPath)
+		fmt.Println("macOS install: open ~/.promptshield/ca/cert.pem")
+		fmt.Println("Then add it to Keychain and set Trust to 'Always Trust'.")
+		return nil
+	default:
+		return fmt.Errorf("usage: psctl ca [init|print]")
 	}
-	fmt.Printf("Root CA ready at %s\n", path)
-	return nil
+}
+
+func daemonCommand() (*exec.Cmd, error) {
+	if path, err := exec.LookPath("psd"); err == nil {
+		return exec.Command(path), nil
+	}
+	if _, err := os.Stat(filepath.Join(".", "psd")); err == nil {
+		return exec.Command("./psd"), nil
+	}
+	return exec.Command("go", "run", "./cmd/psd"), nil
+}
+
+func processStatus() (bool, int) {
+	pidData, err := os.ReadFile(pidFilePath())
+	if err != nil {
+		return false, 0
+	}
+	pid, err := strconv.Atoi(strings.TrimSpace(string(pidData)))
+	if err != nil || pid <= 0 {
+		return false, 0
+	}
+	proc, err := os.FindProcess(pid)
+	if err != nil {
+		return false, 0
+	}
+	if err := proc.Signal(syscall.Signal(0)); err != nil {
+		return false, 0
+	}
+	return true, pid
+}
+
+func pidFilePath() string {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return ".promptshield/psd.pid"
+	}
+	return filepath.Join(home, ".promptshield", "psd.pid")
+}
+
+func daemonLogPath() (string, error) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(home, ".promptshield", "psd.log"), nil
+}
+
+func enabledLabel(v bool) string {
+	if v {
+		return "enabled"
+	}
+	return "disabled"
+}
+
+func mustConfigPath() string {
+	p, err := config.ConfigPath()
+	if err != nil {
+		return "~/.promptshield/config.yaml"
+	}
+	return p
 }
 
 func readLastLines(r io.Reader, n int) ([]string, error) {
