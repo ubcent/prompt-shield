@@ -38,6 +38,15 @@ rules:
     match:
       host_contains: openai.com
     action: block
+  - id: mitm-openai
+    match:
+      host: api.openai.com
+    action: mitm
+mitm:
+  enabled: true
+  domains:
+    - api.openai.com
+    - chat.openai.com
 ```
 
 If no config exists, defaults are used:
@@ -99,6 +108,20 @@ Audit log is JSONL (`~/.promptshield/audit.log`) with fields:
 
 ## Notes
 
-- HTTPS is currently tunneled via CONNECT (no MITM).
-- Proxy package is structured so MITM logic can be added later.
+- HTTPS defaults to CONNECT tunneling and can selectively enable MITM interception by policy/config.
+- MITM internals live in `internal/proxy/mitm` and are isolated from the default tunnel pipeline.
 - Daemon supports graceful shutdown on SIGINT/SIGTERM.
+
+
+## HTTPS interception
+
+1. Generate root CA:
+
+```bash
+go run ./cmd/psctl ca init
+```
+
+2. Install `~/.promptshield/ca/cert.pem` into your system trust store (for macOS use Keychain Access and trust it).
+3. Start proxy and keep `mitm.enabled: true` with domain/rule selection.
+
+MITM is optional and only activates for CONNECT hosts matching both a `mitm` policy action and configured `mitm.domains`. Other HTTPS traffic stays in plain CONNECT tunnel mode.

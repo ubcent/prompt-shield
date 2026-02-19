@@ -30,13 +30,20 @@ type Rule struct {
 type Config struct {
 	Port    int    `json:"port"`
 	LogFile string `json:"log_file"`
+	MITM    MITM   `json:"mitm"`
 	Rules   []Rule `json:"rules"`
+}
+
+type MITM struct {
+	Enabled bool     `json:"enabled"`
+	Domains []string `json:"domains"`
 }
 
 func Default() Config {
 	return Config{
 		Port:    defaultPort,
 		LogFile: defaultLogFile,
+		MITM:    MITM{},
 		Rules: []Rule{{
 			ID:     "allow_all",
 			Action: "allow",
@@ -105,6 +112,8 @@ func parseYAMLLite(r *strings.Reader, cfg *Config) error {
 	s := bufio.NewScanner(r)
 	var currentRule *Rule
 	inMatch := false
+	inMITM := false
+	inMITMDomains := false
 
 	for s.Scan() {
 		line := strings.TrimSpace(s.Text())
@@ -116,8 +125,24 @@ func parseYAMLLite(r *strings.Reader, cfg *Config) error {
 
 		switch {
 		case line == "rules:":
+			inMITMDomains = false
+			inMITM = false
+			continue
+		case line == "mitm:":
+			inMITM = true
+			inMITMDomains = false
+			continue
+		case line == "domains:" && inMITM:
+			inMITMDomains = true
+			continue
+		case inMITMDomains && strings.HasPrefix(strings.TrimSpace(s.Text()), "-"):
+			domain := strings.TrimSpace(strings.TrimLeft(strings.TrimSpace(s.Text()), "-"))
+			if domain != "" {
+				cfg.MITM.Domains = append(cfg.MITM.Domains, domain)
+			}
 			continue
 		case strings.HasPrefix(line, "port:"):
+			inMITMDomains = false
 			v := strings.TrimSpace(strings.TrimPrefix(line, "port:"))
 			port, err := strconv.Atoi(v)
 			if err != nil {
@@ -125,8 +150,14 @@ func parseYAMLLite(r *strings.Reader, cfg *Config) error {
 			}
 			cfg.Port = port
 		case strings.HasPrefix(line, "log_file:"):
+			inMITMDomains = false
 			cfg.LogFile = strings.TrimSpace(strings.TrimPrefix(line, "log_file:"))
+		case strings.HasPrefix(line, "enabled:") && inMITM:
+			inMITMDomains = false
+			cfg.MITM.Enabled = strings.EqualFold(strings.TrimSpace(strings.TrimPrefix(line, "enabled:")), "true")
 		case strings.HasPrefix(line, "id:"):
+			inMITMDomains = false
+			inMITM = false
 			cfg.Rules = append(cfg.Rules, Rule{})
 			currentRule = &cfg.Rules[len(cfg.Rules)-1]
 			currentRule.ID = strings.TrimSpace(strings.TrimPrefix(line, "id:"))

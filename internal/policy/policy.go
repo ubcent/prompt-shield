@@ -12,6 +12,7 @@ type Decision string
 const (
 	Allow Decision = "allow"
 	Block Decision = "block"
+	MITM  Decision = "mitm"
 )
 
 type Result struct {
@@ -44,6 +45,8 @@ func (e *RuleEngine) Evaluate(host string) Result {
 			return Result{Decision: Block, Reason: "matched rule", RuleID: ruleID(r.ID)}
 		case string(Allow):
 			return Result{Decision: Allow, Reason: "matched rule", RuleID: ruleID(r.ID)}
+		case string(MITM):
+			return Result{Decision: MITM, Reason: "matched rule", RuleID: ruleID(r.ID)}
 		default:
 			return Result{Decision: Block, Reason: fmt.Sprintf("invalid action %q", r.Action), RuleID: ruleID(r.ID)}
 		}

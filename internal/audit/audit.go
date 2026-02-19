@@ -10,12 +10,14 @@ import (
 )
 
 type Entry struct {
-	Timestamp string `json:"timestamp"`
-	Method    string `json:"method"`
-	Host      string `json:"host"`
-	Path      string `json:"path,omitempty"`
-	Decision  string `json:"decision"`
-	Reason    string `json:"reason"`
+	Timestamp           string `json:"timestamp"`
+	Method              string `json:"method"`
+	Host                string `json:"host"`
+	Path                string `json:"path,omitempty"`
+	Decision            string `json:"decision"`
+	Reason              string `json:"reason"`
+	RequestBodyPreview  string `json:"request_body_preview,omitempty"`
+	ResponseBodyPreview string `json:"response_body_preview,omitempty"`
 }
 
 type Logger interface {
