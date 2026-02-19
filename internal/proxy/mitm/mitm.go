@@ -15,6 +15,7 @@ import (
 	"promptshield/internal/audit"
 	"promptshield/internal/classifier"
 	"promptshield/internal/policy"
+	"promptshield/internal/sanitizer"
 )
 
 const (
@@ -84,6 +85,9 @@ func (h *Handler) serverHandler(connectHost string) http.Handler {
 			http.Error(w, "request inspection failed", http.StatusBadRequest)
 			return
 		}
+		if updatedPreview, ok := requestJSONPreview(req); ok {
+			reqPreview = updatedPreview
+		}
 
 		resp, err := h.transport.RoundTrip(req)
 		if err != nil {
@@ -106,7 +110,7 @@ func (h *Handler) serverHandler(connectHost string) http.Handler {
 		copyHeader(w.Header(), resp.Header)
 		w.WriteHeader(resp.StatusCode)
 		_, _ = io.Copy(w, resp.Body)
-		h.logAudit(r, host, decision, reqPreview, respPreview)
+		h.logAudit(req, host, decision, reqPreview, respPreview)
 	})
 }
 
@@ -114,7 +118,35 @@ func (h *Handler) logAudit(r *http.Request, host string, decision policy.Result,
 	if h.audit == nil {
 		return
 	}
-	_ = h.audit.Log(audit.Entry{Method: r.Method, Host: host, Path: r.URL.Path, Decision: string(decision.Decision), Reason: fmt.Sprintf("%s (%s)", decision.Reason, decision.RuleID), RequestBodyPreview: reqPreview, ResponseBodyPreview: respPreview})
+	entry := audit.Entry{Method: r.Method, Host: host, Path: r.URL.Path, Decision: string(decision.Decision), Reason: fmt.Sprintf("%s (%s)", decision.Reason, decision.RuleID), RequestBodyPreview: reqPreview, ResponseBodyPreview: respPreview}
+	if md, ok := sanitizer.AuditMetadataFromRequest(r); ok && md.Sanitized {
+		entry.Sanitized = true
+		entry.SanitizedItems = make([]audit.SanitizedAudit, 0, len(md.Items))
+		for _, item := range md.Items {
+			entry.SanitizedItems = append(entry.SanitizedItems, audit.SanitizedAudit{Type: item.Type, Placeholder: item.Placeholder})
+		}
+	}
+	_ = h.audit.Log(entry)
+}
+
+func requestJSONPreview(r *http.Request) (string, bool) {
+	if r.Body == nil {
+		return "", false
+	}
+	body, err := io.ReadAll(r.Body)
+	if err != nil {
+		return "", false
+	}
+	r.Body = io.NopCloser(bytes.NewReader(body))
+	if !strings.Contains(strings.ToLower(r.Header.Get("Content-Type")), "application/json") {
+		return "", false
+	}
+	preview := string(body)
+	if len(preview) > maxAuditBodySize {
+		preview = preview[:maxAuditBodySize]
+	}
+	preview = strings.ReplaceAll(preview, "\n", "")
+	return preview, true
 }
 
 func cloneLimitedRequest(r *http.Request, limit int64) (*http.Request, string, error) {

@@ -76,7 +76,7 @@ func startDaemon() error {
 	if err != nil {
 		return err
 	}
-	server := proxy.New(fmt.Sprintf("127.0.0.1:%d", cfg.Port), policy.NewRuleEngine(cfg.Rules), classifier.HostClassifier{}, logger, cfg.MITM)
+	server := proxy.New(fmt.Sprintf("127.0.0.1:%d", cfg.Port), policy.NewRuleEngine(cfg.Rules), classifier.HostClassifier{}, logger, cfg.MITM, cfg.Sanitizer)
 
 	errCh := make(chan error, 1)
 	go func() { errCh <- server.Start() }()
