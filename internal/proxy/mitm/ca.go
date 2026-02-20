@@ -9,6 +9,7 @@ import (
 	"encoding/pem"
 	"fmt"
 	"math/big"
+	"net"
 	"os"
 	"path/filepath"
 	"sync"
@@ -164,12 +165,19 @@ func (c *CAStore) generateLeafCertLocked(host string) (*tls.Certificate, error) 
 	tpl := &x509.Certificate{
 		SerialNumber: randomSerial(),
 		Subject:      pkix.Name{CommonName: host, Organization: []string{"PromptShield MITM"}},
-		DNSNames:     []string{host},
 		NotBefore:    notBefore,
 		NotAfter:     notBefore.Add(maxLeafLifetime),
 		KeyUsage:     x509.KeyUsageDigitalSignature,
 		ExtKeyUsage:  []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
 	}
+
+	// Check if host is an IP address or hostname
+	if ip := net.ParseIP(host); ip != nil {
+		tpl.IPAddresses = []net.IP{ip}
+	} else {
+		tpl.DNSNames = []string{host}
+	}
+
 	der, err := x509.CreateCertificate(rand.Reader, tpl, c.caCert, &leafKey.PublicKey, c.caKey)
 	if err != nil {
 		return nil, fmt.Errorf("create leaf cert: %w", err)

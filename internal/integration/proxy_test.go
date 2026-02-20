@@ -14,13 +14,6 @@ import (
 	"time"
 )
 
-func TestMain(m *testing.M) {
-	if strings.TrimSpace(os.Getenv("RUN_INTEGRATION")) == "" {
-		os.Exit(0)
-	}
-	os.Exit(m.Run())
-}
-
 func TestMaskAndRestore(t *testing.T) {
 	responseBody := sendThroughProxy(t, map[string]string{"message": "email me at alice@example.com"})
 	if !strings.Contains(responseBody, "alice@example.com") {
@@ -113,7 +106,7 @@ func TestConcurrentRequestsIsolation(t *testing.T) {
 func sendThroughProxy(t *testing.T, payload map[string]string) string {
 	t.Helper()
 
-	proxyURL, err := url.Parse("http://" + envOrDefault("INTEGRATION_PROXY_ADDR", "localhost:8080"))
+	proxyURL, err := url.Parse("http://" + envOrDefault("PROXY_ADDR", "localhost:8080"))
 	if err != nil {
 		t.Fatalf("parse proxy url: %v", err)
 	}
@@ -130,7 +123,7 @@ func sendThroughProxy(t *testing.T, payload map[string]string) string {
 		t.Fatalf("marshal payload: %v", err)
 	}
 
-	target := "http://" + envOrDefault("INTEGRATION_ECHO_ADDR", "localhost:9000") + "/"
+	target := "http://" + envOrDefault("ECHO_ADDR", "localhost:9000") + "/"
 	req, err := http.NewRequest(http.MethodPost, target, bytes.NewReader(data))
 	if err != nil {
 		t.Fatalf("build request: %v", err)
@@ -157,7 +150,7 @@ func fetchUpstreamLastBody(t *testing.T) string {
 	t.Helper()
 
 	client := &http.Client{Timeout: 5 * time.Second}
-	endpoint := "http://" + envOrDefault("INTEGRATION_ECHO_ADDR", "localhost:9000") + "/last"
+	endpoint := "http://" + envOrDefault("ECHO_ADDR", "localhost:9000") + "/last"
 	resp, err := client.Get(endpoint)
 	if err != nil {
 		t.Fatalf("get upstream /last: %v", err)

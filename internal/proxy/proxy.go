@@ -86,6 +86,13 @@ func (p *Proxy) Shutdown(ctx context.Context) error {
 }
 
 func (p *Proxy) handle(w http.ResponseWriter, r *http.Request) {
+	// Health check endpoint
+	if r.URL.Path == "/health" {
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte("OK"))
+		return
+	}
+
 	host := normalizeHost(r.Host)
 	if host == "" && r.URL != nil {
 		host = normalizeHost(r.URL.Host)

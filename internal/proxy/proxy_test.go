@@ -218,3 +218,398 @@ func TestProxyAuditLoggingJSON(t *testing.T) {
 		t.Fatalf("unexpected audit entry: %+v", entry)
 	}
 }
+
+// TestMaskAndRestore verifies that PII is masked upstream and restored in the client response
+func TestMaskAndRestore(t *testing.T) {
+	// Echo server that captures and returns what it received
+	var upstreamReceived string
+	var mu sync.Mutex
+	echoServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		mu.Lock()
+		upstreamReceived = string(body)
+		mu.Unlock()
+
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write(body)
+	}))
+	defer echoServer.Close()
+
+	// Setup proxy with MITM and sanitization
+	caDir := t.TempDir()
+	ca := mitm.NewCAStore(caDir)
+	if err := ca.EnsureRootCA(); err != nil {
+		t.Fatalf("ensure CA: %v", err)
+	}
+
+	mitmCfg := config.MITM{
+		Enabled: true,
+		Domains: []string{"127.0.0.1"},
+	}
+	sanitizerCfg := config.Sanitizer{
+		Enabled: true,
+		Types:   []string{"email"},
+	}
+
+	rules := []config.Rule{{ID: "mitm-all", Match: config.Match{HostContains: "127.0.0.1"}, Action: "mitm"}}
+	_, proxySrv := newTestProxy(t, policy.NewRuleEngine(rules), &memoryAudit{}, mitmCfg, sanitizerCfg, caDir)
+	defer proxySrv.Close()
+
+	// Load CA cert for client
+	certPEM, err := os.ReadFile(filepath.Join(caDir, "cert.pem"))
+	if err != nil {
+		t.Fatalf("read CA cert: %v", err)
+	}
+	rootCAs := x509.NewCertPool()
+	if !rootCAs.AppendCertsFromPEM(certPEM) {
+		t.Fatalf("failed to add CA cert to pool")
+	}
+
+	// Create HTTPS test server
+	httpsServer := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		mu.Lock()
+		upstreamReceived = string(body)
+		mu.Unlock()
+
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write(body)
+	}))
+	httpsServer.StartTLS()
+	defer httpsServer.Close()
+
+	// Create proxy client
+	client := proxyClient(proxySrv.URL, rootCAs)
+	client.Timeout = 10 * time.Second
+
+	// Send request with email
+	original := map[string]string{"message": "my email is dvbondarchuk@gmail.com"}
+	reqBody, _ := json.Marshal(original)
+
+	req, err := http.NewRequest(http.MethodPost, httpsServer.URL, strings.NewReader(string(reqBody)))
+	if err != nil {
+		t.Fatalf("new request: %v", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := client.Do(req)
+	if err != nil {
+		t.Fatalf("client.Do() error = %v", err)
+	}
+	defer resp.Body.Close()
+
+	respBody, _ := io.ReadAll(resp.Body)
+
+	// ASSERT: response contains original email (restored)
+	if !strings.Contains(string(respBody), "dvbondarchuk@gmail.com") {
+		t.Errorf("response should contain original email, got: %s", string(respBody))
+	}
+
+	// ASSERT: response does NOT contain placeholder
+	if strings.Contains(string(respBody), "[EMAIL_1]") {
+		t.Errorf("response should not contain placeholder, got: %s", string(respBody))
+	}
+
+	// ASSERT: upstream received masked value
+	mu.Lock()
+	received := upstreamReceived
+	mu.Unlock()
+
+	if !strings.Contains(received, "[EMAIL_1]") {
+		t.Errorf("upstream should receive masked email, got: %s", received)
+	}
+
+	if strings.Contains(received, "dvbondarchuk@gmail.com") {
+		t.Errorf("upstream should not receive original email, got: %s", received)
+	}
+}
+
+// TestNoPII verifies that requests without PII pass through unchanged
+func TestNoPII(t *testing.T) {
+	var upstreamReceived string
+	var mu sync.Mutex
+
+	httpsServer := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		mu.Lock()
+		upstreamReceived = string(body)
+		mu.Unlock()
+
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write(body)
+	}))
+	httpsServer.StartTLS()
+	defer httpsServer.Close()
+
+	caDir := t.TempDir()
+	ca := mitm.NewCAStore(caDir)
+	if err := ca.EnsureRootCA(); err != nil {
+		t.Fatalf("ensure CA: %v", err)
+	}
+
+	mitmCfg := config.MITM{Enabled: true, Domains: []string{"127.0.0.1"}}
+	sanitizerCfg := config.Sanitizer{Enabled: true, Types: []string{"email"}}
+	rules := []config.Rule{{ID: "mitm-all", Match: config.Match{HostContains: "127.0.0.1"}, Action: "mitm"}}
+
+	_, proxySrv := newTestProxy(t, policy.NewRuleEngine(rules), &memoryAudit{}, mitmCfg, sanitizerCfg, caDir)
+	defer proxySrv.Close()
+
+	certPEM, _ := os.ReadFile(filepath.Join(caDir, "cert.pem"))
+	rootCAs := x509.NewCertPool()
+	rootCAs.AppendCertsFromPEM(certPEM)
+
+	client := proxyClient(proxySrv.URL, rootCAs)
+	client.Timeout = 10 * time.Second
+
+	original := map[string]string{"message": "hello world no sensitive data"}
+	reqBody, _ := json.Marshal(original)
+
+	req, _ := http.NewRequest(http.MethodPost, httpsServer.URL, strings.NewReader(string(reqBody)))
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := client.Do(req)
+	if err != nil {
+		t.Fatalf("client.Do() error = %v", err)
+	}
+	defer resp.Body.Close()
+
+	respBody, _ := io.ReadAll(resp.Body)
+
+	// ASSERT: response unchanged
+	if !strings.Contains(string(respBody), "hello world no sensitive data") {
+		t.Errorf("response should be unchanged, got: %s", string(respBody))
+	}
+
+	// ASSERT: upstream received unchanged
+	mu.Lock()
+	received := upstreamReceived
+	mu.Unlock()
+
+	if !strings.Contains(received, "hello world no sensitive data") {
+		t.Errorf("upstream should receive unchanged body, got: %s", received)
+	}
+}
+
+// TestMultiplePII verifies that multiple PII items are masked and restored correctly
+func TestMultiplePII(t *testing.T) {
+	var upstreamReceived string
+	var mu sync.Mutex
+
+	httpsServer := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		mu.Lock()
+		upstreamReceived = string(body)
+		mu.Unlock()
+
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write(body)
+	}))
+	httpsServer.StartTLS()
+	defer httpsServer.Close()
+
+	caDir := t.TempDir()
+	ca := mitm.NewCAStore(caDir)
+	if err := ca.EnsureRootCA(); err != nil {
+		t.Fatalf("ensure CA: %v", err)
+	}
+
+	mitmCfg := config.MITM{Enabled: true, Domains: []string{"127.0.0.1"}}
+	sanitizerCfg := config.Sanitizer{Enabled: true, Types: []string{"email"}}
+	rules := []config.Rule{{ID: "mitm-all", Match: config.Match{HostContains: "127.0.0.1"}, Action: "mitm"}}
+
+	_, proxySrv := newTestProxy(t, policy.NewRuleEngine(rules), &memoryAudit{}, mitmCfg, sanitizerCfg, caDir)
+	defer proxySrv.Close()
+
+	certPEM, _ := os.ReadFile(filepath.Join(caDir, "cert.pem"))
+	rootCAs := x509.NewCertPool()
+	rootCAs.AppendCertsFromPEM(certPEM)
+
+	client := proxyClient(proxySrv.URL, rootCAs)
+	client.Timeout = 10 * time.Second
+
+	original := map[string]string{"message": "emails: alice@example.com and bob@example.com"}
+	reqBody, _ := json.Marshal(original)
+
+	req, _ := http.NewRequest(http.MethodPost, httpsServer.URL, strings.NewReader(string(reqBody)))
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := client.Do(req)
+	if err != nil {
+		t.Fatalf("client.Do() error = %v", err)
+	}
+	defer resp.Body.Close()
+
+	respBody, _ := io.ReadAll(resp.Body)
+
+	// ASSERT: response contains both original emails
+	if !strings.Contains(string(respBody), "alice@example.com") {
+		t.Errorf("response should contain alice@example.com, got: %s", string(respBody))
+	}
+	if !strings.Contains(string(respBody), "bob@example.com") {
+		t.Errorf("response should contain bob@example.com, got: %s", string(respBody))
+	}
+
+	// ASSERT: response does NOT contain placeholders
+	if strings.Contains(string(respBody), "[EMAIL_1]") || strings.Contains(string(respBody), "[EMAIL_2]") {
+		t.Errorf("response should not contain placeholders, got: %s", string(respBody))
+	}
+
+	// ASSERT: upstream received both masked values
+	mu.Lock()
+	received := upstreamReceived
+	mu.Unlock()
+
+	if !strings.Contains(received, "[EMAIL_1]") || !strings.Contains(received, "[EMAIL_2]") {
+		t.Errorf("upstream should receive both masked emails, got: %s", received)
+	}
+}
+
+// TestLargeBodySkipped verifies that large payloads skip sanitization
+func TestLargeBodySkipped(t *testing.T) {
+	var upstreamReceived string
+	var mu sync.Mutex
+
+	httpsServer := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		mu.Lock()
+		upstreamReceived = string(body)
+		mu.Unlock()
+
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write(body)
+	}))
+	httpsServer.StartTLS()
+	defer httpsServer.Close()
+
+	caDir := t.TempDir()
+	ca := mitm.NewCAStore(caDir)
+	if err := ca.EnsureRootCA(); err != nil {
+		t.Fatalf("ensure CA: %v", err)
+	}
+
+	mitmCfg := config.MITM{Enabled: true, Domains: []string{"127.0.0.1"}}
+	sanitizerCfg := config.Sanitizer{Enabled: true, Types: []string{"email"}}
+	rules := []config.Rule{{ID: "mitm-all", Match: config.Match{HostContains: "127.0.0.1"}, Action: "mitm"}}
+
+	_, proxySrv := newTestProxy(t, policy.NewRuleEngine(rules), &memoryAudit{}, mitmCfg, sanitizerCfg, caDir)
+	defer proxySrv.Close()
+
+	certPEM, _ := os.ReadFile(filepath.Join(caDir, "cert.pem"))
+	rootCAs := x509.NewCertPool()
+	rootCAs.AppendCertsFromPEM(certPEM)
+
+	client := proxyClient(proxySrv.URL, rootCAs)
+	client.Timeout = 10 * time.Second
+
+	// Create a large payload (>1MB)
+	largeData := strings.Repeat("x", (1<<20)+1024)
+	original := map[string]string{"message": "large payload " + largeData + " tail@example.com"}
+	reqBody, _ := json.Marshal(original)
+
+	req, _ := http.NewRequest(http.MethodPost, httpsServer.URL, strings.NewReader(string(reqBody)))
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := client.Do(req)
+	if err != nil {
+		t.Fatalf("client.Do() error = %v", err)
+	}
+	defer resp.Body.Close()
+
+	respBody, _ := io.ReadAll(resp.Body)
+
+	// ASSERT: response contains original email (not masked due to size)
+	if !strings.Contains(string(respBody), "tail@example.com") {
+		t.Errorf("response should contain original email when sanitization skipped, got body length: %d", len(respBody))
+	}
+
+	// ASSERT: upstream received original email (not masked)
+	mu.Lock()
+	received := upstreamReceived
+	mu.Unlock()
+
+	if !strings.Contains(received, "tail@example.com") {
+		t.Errorf("upstream should receive original email for large body, got length: %d", len(received))
+	}
+}
+
+// TestConcurrentRequests verifies that concurrent requests maintain isolated state
+func TestConcurrentRequests(t *testing.T) {
+	httpsServer := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write(body)
+	}))
+	httpsServer.StartTLS()
+	defer httpsServer.Close()
+
+	caDir := t.TempDir()
+	ca := mitm.NewCAStore(caDir)
+	if err := ca.EnsureRootCA(); err != nil {
+		t.Fatalf("ensure CA: %v", err)
+	}
+
+	mitmCfg := config.MITM{Enabled: true, Domains: []string{"127.0.0.1"}}
+	sanitizerCfg := config.Sanitizer{Enabled: true, Types: []string{"email"}}
+	rules := []config.Rule{{ID: "mitm-all", Match: config.Match{HostContains: "127.0.0.1"}, Action: "mitm"}}
+
+	_, proxySrv := newTestProxy(t, policy.NewRuleEngine(rules), &memoryAudit{}, mitmCfg, sanitizerCfg, caDir)
+	defer proxySrv.Close()
+
+	certPEM, _ := os.ReadFile(filepath.Join(caDir, "cert.pem"))
+	rootCAs := x509.NewCertPool()
+	rootCAs.AppendCertsFromPEM(certPEM)
+
+	client := proxyClient(proxySrv.URL, rootCAs)
+	client.Timeout = 10 * time.Second
+
+	const workers = 10
+	var wg sync.WaitGroup
+	errCh := make(chan error, workers)
+
+	for i := 0; i < workers; i++ {
+		i := i
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+
+			email := "user-" + strings.Repeat("0", 3-len(strings.Split(strings.TrimSpace(strings.Repeat(" ", i)), " "))) + string('0'+rune(i)) + "@example.com"
+			if i >= 10 {
+				email = "user-" + string('0'+rune(i/10)) + string('0'+rune(i%10)) + "@example.com"
+			}
+
+			original := map[string]string{"message": "email: " + email}
+			reqBody, _ := json.Marshal(original)
+
+			req, _ := http.NewRequest(http.MethodPost, httpsServer.URL, strings.NewReader(string(reqBody)))
+			req.Header.Set("Content-Type", "application/json")
+
+			resp, err := client.Do(req)
+			if err != nil {
+				errCh <- err
+				return
+			}
+			defer resp.Body.Close()
+
+			respBody, _ := io.ReadAll(resp.Body)
+
+			// ASSERT: response contains correct original email
+			if !strings.Contains(string(respBody), email) {
+				errCh <- http.ErrMissingFile // placeholder error
+				return
+			}
+
+			// ASSERT: response does NOT contain placeholder
+			if strings.Contains(string(respBody), "[EMAIL_") {
+				errCh <- http.ErrBodyNotAllowed // placeholder error
+				return
+			}
+		}()
+	}
+
+	wg.Wait()
+	close(errCh)
+
+	for err := range errCh {
+		t.Errorf("concurrent request error: %v", err)
+	}
+}

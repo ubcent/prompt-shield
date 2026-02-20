@@ -107,7 +107,7 @@ func (h *Handler) serverHandler(connectHost string) http.Handler {
 			return
 		}
 
-		req, reqPreview, err := cloneLimitedRequest(r, maxBodySize)
+		req, reqPreview, skipInspect, err := cloneLimitedRequest(r, maxBodySize)
 		if err != nil {
 			http.Error(w, "request too large", http.StatusRequestEntityTooLarge)
 			return
@@ -156,15 +156,19 @@ func (h *Handler) serverHandler(connectHost string) http.Handler {
 		}
 
 		log.Printf("MITM: before InspectRequest: %s %s", req.Method, req.URL)
-		req, err = h.inspector.InspectRequest(req)
-		if err != nil {
-			log.Printf("MITM: InspectRequest error: %v", err)
-			http.Error(w, "request inspection failed", http.StatusBadRequest)
-			return
-		}
-		log.Printf("MITM: after InspectRequest: %s %s", req.Method, req.URL)
-		if updatedPreview, ok := requestJSONPreview(req); ok {
-			reqPreview = updatedPreview
+		if !skipInspect {
+			req, err = h.inspector.InspectRequest(req)
+			if err != nil {
+				log.Printf("MITM: InspectRequest error: %v", err)
+				http.Error(w, "request inspection failed", http.StatusBadRequest)
+				return
+			}
+			log.Printf("MITM: after InspectRequest: %s %s", req.Method, req.URL)
+			if updatedPreview, ok := requestJSONPreview(req); ok {
+				reqPreview = updatedPreview
+			}
+		} else {
+			log.Printf("MITM: skipping request inspection due to size (content-length=%d)", r.ContentLength)
 		}
 		log.Printf("MITM: sending request to upstream: %s %s (Host: %s, User-Agent: %s)", req.Method, req.URL.String(), req.Host, req.Header.Get("User-Agent"))
 
@@ -176,6 +180,15 @@ func (h *Handler) serverHandler(connectHost string) http.Handler {
 		}
 		defer resp.Body.Close()
 		log.Printf("MITM: received response for %s: status=%d", host, resp.StatusCode)
+
+		if resp.ContentLength > maxBodySize || resp.ContentLength < 0 {
+			log.Printf("MITM: skipping response inspection due to size (content-length=%d)", resp.ContentLength)
+			copyHeader(w.Header(), resp.Header)
+			w.WriteHeader(resp.StatusCode)
+			_, _ = io.Copy(w, resp.Body)
+			h.logAudit(req, host, decision, reqPreview, "")
+			return
+		}
 
 		resp, respPreview, err := cloneLimitedResponse(resp, maxBodySize)
 		if err != nil {
@@ -309,19 +322,24 @@ func requestJSONPreview(r *http.Request) (string, bool) {
 	return preview, true
 }
 
-func cloneLimitedRequest(r *http.Request, limit int64) (*http.Request, string, error) {
+func cloneLimitedRequest(r *http.Request, limit int64) (*http.Request, string, bool, error) {
 	out := r.Clone(r.Context())
 	if r.Body == nil {
-		return out, "", nil
+		return out, "", false, nil
+	}
+	if r.ContentLength > limit || r.ContentLength < 0 {
+		out.Body = r.Body
+		out.ContentLength = r.ContentLength
+		return out, "", true, nil
 	}
 	body, preview, err := readLimitedBody(r.Body, r.Header.Get("Content-Type"), limit)
 	if err != nil {
-		return nil, "", err
+		return nil, "", false, err
 	}
 	r.Body = io.NopCloser(bytes.NewReader(body))
 	out.Body = io.NopCloser(bytes.NewReader(body))
 	out.ContentLength = int64(len(body))
-	return out, preview, nil
+	return out, preview, false, nil
 }
 
 func cloneLimitedResponse(r *http.Response, limit int64) (*http.Response, string, error) {

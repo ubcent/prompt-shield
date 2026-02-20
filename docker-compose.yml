@@ -7,6 +7,11 @@ services:
       dockerfile: Dockerfile
     ports:
       - "8080:8080"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      interval: 2s
+      timeout: 1s
+      retries: 30
 
   echo:
     build:
@@ -14,17 +19,25 @@ services:
       dockerfile: cmd/echo-server/Dockerfile
     ports:
       - "9000:9000"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/health"]
+      interval: 2s
+      timeout: 1s
+      retries: 30
 
-  tester:
+  # Все тесты - запускаются одной командой
+  test:
     image: golang:1.22-alpine
     working_dir: /app
     volumes:
       - .:/app
     depends_on:
-      - proxy
-      - echo
+      proxy:
+        condition: service_healthy
+      echo:
+        condition: service_healthy
     environment:
-      - RUN_INTEGRATION=1
-      - INTEGRATION_PROXY_ADDR=proxy:8080
-      - INTEGRATION_ECHO_ADDR=echo:9000
-    command: ["go", "test", "./internal/integration", "-v", "-count=1"]
+      - PROXY_ADDR=proxy:8080
+      - ECHO_ADDR=echo:9000
+    command: ["go", "test", "./...", "-v", "-count=1"]
+

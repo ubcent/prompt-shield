@@ -16,6 +16,11 @@ type echoState struct {
 func main() {
 	state := &echoState{}
 
+	http.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte("OK"))
+	})
+
 	http.HandleFunc("/last", func(w http.ResponseWriter, r *http.Request) {
 		state.mu.RLock()
 		last := state.lastBody
