@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"syscall"
@@ -85,6 +86,13 @@ func startDaemon() error {
 		return nil
 	}
 
+	if runtime.GOOS == "darwin" && isSystemProxyEnabled(cfg.Port) && !isDaemonRunning() {
+		fmt.Println("Detected stale proxy settings. Disabling system proxy.")
+		if err := disableSystemProxy(); err != nil {
+			return err
+		}
+	}
+
 	stdoutLog, err := daemonLogPath()
 	if err != nil {
 		return err
@@ -124,6 +132,12 @@ func startDaemon() error {
 }
 
 func stopDaemon() error {
+	if runtime.GOOS == "darwin" {
+		if err := disableSystemProxy(); err != nil {
+			return err
+		}
+	}
+
 	pid, err := readPID()
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
@@ -299,6 +313,10 @@ func proxy(args []string) error {
 		if err != nil {
 			return err
 		}
+		if !isDaemonRunning() {
+			fmt.Println("Cannot enable proxy: PromptShield is not running")
+			os.Exit(1)
+		}
 		if _, err := systemproxy.Enable("localhost", cfg.Port); err != nil {
 			return err
 		}
@@ -337,6 +355,58 @@ func daemonCommand() (*exec.Cmd, error) {
 		return exec.Command("./psd"), nil
 	}
 	return exec.Command("go", "run", "./cmd/psd"), nil
+}
+
+func isDaemonRunning() bool {
+	pid, err := readPID()
+	if err != nil {
+		return false
+	}
+	return isProcessRunning(pid)
+}
+
+func disableSystemProxy() error {
+	if _, err := systemproxy.Disable(); err != nil {
+		return err
+	}
+	fmt.Println("System proxy disabled")
+	return nil
+}
+
+func isSystemProxyEnabled(port int) bool {
+	path, err := exec.LookPath("networksetup")
+	if err != nil {
+		return false
+	}
+	out, err := exec.Command(path, "-getwebproxy", "Wi-Fi").CombinedOutput()
+	if err != nil {
+		return false
+	}
+
+	var (
+		enabled bool
+		host    string
+		cfgPort int
+	)
+
+	for _, line := range strings.Split(string(out), "\n") {
+		parts := strings.SplitN(line, ":", 2)
+		if len(parts) != 2 {
+			continue
+		}
+		key := strings.TrimSpace(parts[0])
+		val := strings.TrimSpace(parts[1])
+		switch key {
+		case "Enabled":
+			enabled = strings.EqualFold(val, "Yes")
+		case "Server":
+			host = val
+		case "Port":
+			cfgPort, _ = strconv.Atoi(val)
+		}
+	}
+
+	return enabled && host == "localhost" && cfgPort == port
 }
 
 func processStatus() (bool, int) {
