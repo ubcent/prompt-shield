@@ -106,3 +106,17 @@ func TestSanitizingInspectorInspectRequestSkipsEventStreamAndGet(t *testing.T) {
 		t.Fatalf("GET body mutated: %q", string(bodyGet))
 	}
 }
+
+func TestUniqueTypes(t *testing.T) {
+	items := []SanitizedItem{
+		{Type: "email"},
+		{Type: "email"},
+		{Type: "api_key"},
+		{Type: ""},
+	}
+
+	types := uniqueTypes(items)
+	if len(types) != 2 || types[0] != "email" || types[1] != "api_key" {
+		t.Fatalf("uniqueTypes() = %#v", types)
+	}
+}

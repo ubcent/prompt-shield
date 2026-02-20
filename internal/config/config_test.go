@@ -22,3 +22,16 @@ func TestParseYAMLLiteSanitizerConfig(t *testing.T) {
 		t.Fatalf("unexpected sanitizer config: %+v", cfg.Sanitizer)
 	}
 }
+
+func TestParseYAMLLiteNotificationsConfig(t *testing.T) {
+	cfg := Default()
+	err := parseYAMLLite(strings.NewReader(`notifications:
+  enabled: false
+`), &cfg)
+	if err != nil {
+		t.Fatalf("parseYAMLLite() error = %v", err)
+	}
+	if cfg.Notifications.Enabled {
+		t.Fatalf("expected notifications to be disabled")
+	}
+}

@@ -4,11 +4,14 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"log"
 	"net/http"
 	"strconv"
 	"strings"
+
+	"promptshield/internal/notifier"
 )
 
 const defaultMaxBodyBytes int64 = 1 << 20
@@ -23,12 +26,18 @@ type AuditMetadata struct {
 }
 
 type SanitizingInspector struct {
-	sanitizer   *Sanitizer
-	maxBodySize int64
+	sanitizer            *Sanitizer
+	maxBodySize          int64
+	notificationsEnabled bool
 }
 
 func NewSanitizingInspector(s *Sanitizer) *SanitizingInspector {
 	return &SanitizingInspector{sanitizer: s, maxBodySize: defaultMaxBodyBytes}
+}
+
+func (i *SanitizingInspector) WithNotifications(enabled bool) *SanitizingInspector {
+	i.notificationsEnabled = enabled
+	return i
 }
 
 func readBodySafe(r *http.Request, maxSize int64) ([]byte, error) {
@@ -98,9 +107,29 @@ func (i *SanitizingInspector) InspectRequest(r *http.Request) (*http.Request, er
 	restoreBody(r, newBody)
 	if len(items) > 0 {
 		log.Printf("sanitized %d items", len(items))
+		if i.notificationsEnabled {
+			notifier.Notify("PromptShield", fmt.Sprintf("Sensitive data detected: %s", strings.Join(uniqueTypes(items), ", ")))
+		}
 		r = withAuditMetadata(r, AuditMetadata{Sanitized: true, Items: items})
 	}
 	return r, nil
+}
+
+func uniqueTypes(items []SanitizedItem) []string {
+	seen := make(map[string]struct{}, len(items))
+	types := make([]string, 0, len(items))
+	for _, item := range items {
+		typ := strings.TrimSpace(item.Type)
+		if typ == "" {
+			continue
+		}
+		if _, ok := seen[typ]; ok {
+			continue
+		}
+		seen[typ] = struct{}{}
+		types = append(types, typ)
+	}
+	return types
 }
 
 func (i *SanitizingInspector) InspectResponse(r *http.Response) (*http.Response, error) {

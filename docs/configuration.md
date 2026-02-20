@@ -29,6 +29,9 @@ sanitizer:
   confidence_threshold: 0.8
   max_replacements: 100
 
+notifications:
+  enabled: true
+
 rules:
   - id: allow-all
     action: allow
@@ -74,6 +77,13 @@ Controls content redaction during inspected traffic.
 - `types`: detector types to apply (for example: `email`, `phone`, `api_key`, `jwt`)
 - `confidence_threshold`: optional detection threshold
 - `max_replacements`: upper bound for redactions in one payload
+
+### `notifications`
+
+Controls macOS system notifications when sanitizer detections occur.
+
+- `enabled`: turn notifications on/off
+- default: `true`
 
 ### `rules`
 
