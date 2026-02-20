@@ -3,13 +3,17 @@ package sanitizer
 import (
 	"bytes"
 	"context"
-	"fmt"
+	"errors"
 	"io"
+	"log"
 	"net/http"
+	"strconv"
 	"strings"
 )
 
 const defaultMaxBodyBytes int64 = 1 << 20
+
+var errBodyTooLarge = errors.New("body too large")
 
 type auditContextKey struct{}
 
@@ -19,37 +23,81 @@ type AuditMetadata struct {
 }
 
 type SanitizingInspector struct {
-	sanitizer    *Sanitizer
-	maxBodyBytes int64
+	sanitizer   *Sanitizer
+	maxBodySize int64
 }
 
 func NewSanitizingInspector(s *Sanitizer) *SanitizingInspector {
-	return &SanitizingInspector{sanitizer: s, maxBodyBytes: defaultMaxBodyBytes}
+	return &SanitizingInspector{sanitizer: s, maxBodySize: defaultMaxBodyBytes}
+}
+
+func readBodySafe(r *http.Request, maxSize int64) ([]byte, error) {
+	if r.Body == nil {
+		return nil, nil
+	}
+	body, err := io.ReadAll(io.LimitReader(r.Body, maxSize+1))
+	if err != nil {
+		_ = r.Body.Close()
+		return nil, err
+	}
+	_ = r.Body.Close()
+	if int64(len(body)) > maxSize {
+		return nil, errBodyTooLarge
+	}
+	return body, nil
+}
+
+func restoreBody(r *http.Request, body []byte) {
+	r.Body = io.NopCloser(bytes.NewReader(body))
+	r.ContentLength = int64(len(body))
+	r.Header.Set("Content-Length", strconv.Itoa(len(body)))
+	r.Header.Del("Transfer-Encoding")
+}
+
+func isTextContent(contentType string) bool {
+	ct := strings.ToLower(contentType)
+	return strings.Contains(ct, "application/json") ||
+		strings.Contains(ct, "text/plain") ||
+		strings.Contains(ct, "application/x-www-form-urlencoded")
 }
 
 func (i *SanitizingInspector) InspectRequest(r *http.Request) (*http.Request, error) {
-	if i == nil || i.sanitizer == nil || !supportedContentType(r.Header.Get("Content-Type")) || r.Body == nil {
+	log.Printf("inspect request: %s %s", r.Method, r.URL)
+	if r == nil || i == nil || i.sanitizer == nil {
 		return r, nil
 	}
-	limit := i.maxBodyBytes
+	if r.Method == http.MethodGet || r.Body == nil {
+		return r, nil
+	}
+	if strings.Contains(strings.ToLower(r.Header.Get("Content-Type")), "text/event-stream") {
+		return r, nil
+	}
+	if !isTextContent(r.Header.Get("Content-Type")) {
+		return r, nil
+	}
+	limit := i.maxBodySize
 	if limit <= 0 {
 		limit = defaultMaxBodyBytes
 	}
-	body, err := io.ReadAll(io.LimitReader(r.Body, limit+1))
-	if err != nil {
-		return nil, fmt.Errorf("read body: %w", err)
-	}
-	_ = r.Body.Close()
-	if int64(len(body)) > limit {
-		return nil, fmt.Errorf("body too large")
+	if r.ContentLength < 0 || r.ContentLength > limit {
+		return r, nil
 	}
 
-	sanitizedText, items := i.sanitizer.Sanitize(string(body))
-	sanitizedBytes := []byte(sanitizedText)
-	r.Body = io.NopCloser(bytes.NewReader(sanitizedBytes))
-	r.ContentLength = int64(len(sanitizedBytes))
-	r.Header.Set("Content-Length", fmt.Sprintf("%d", len(sanitizedBytes)))
+	body, err := readBodySafe(r, limit)
+	if err != nil {
+		log.Printf("sanitizer read error: %v", err)
+		return r, nil
+	}
+	if len(body) == 0 {
+		restoreBody(r, body)
+		return r, nil
+	}
+
+	sanitized, items := i.sanitizer.Sanitize(string(body))
+	newBody := []byte(sanitized)
+	restoreBody(r, newBody)
 	if len(items) > 0 {
+		log.Printf("sanitized %d items", len(items))
 		r = withAuditMetadata(r, AuditMetadata{Sanitized: true, Items: items})
 	}
 	return r, nil
@@ -68,9 +116,4 @@ func AuditMetadataFromRequest(r *http.Request) (AuditMetadata, bool) {
 	v := r.Context().Value(auditContextKey{})
 	md, ok := v.(AuditMetadata)
 	return md, ok
-}
-
-func supportedContentType(contentType string) bool {
-	ct := strings.ToLower(contentType)
-	return strings.Contains(ct, "application/json") || strings.Contains(ct, "text/plain")
 }
