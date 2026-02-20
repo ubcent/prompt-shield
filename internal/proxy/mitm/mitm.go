@@ -2,7 +2,6 @@ package mitm
 
 import (
 	"bytes"
-	"context"
 	"crypto/tls"
 	"fmt"
 	"io"
@@ -10,6 +9,7 @@ import (
 	"net"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 
 	"promptshield/internal/audit"
@@ -22,6 +22,15 @@ const (
 	maxBodySize      = 1 << 20
 	maxAuditBodySize = 512
 )
+
+type errorLogger struct {
+	host string
+}
+
+func (el *errorLogger) Write(p []byte) (n int, err error) {
+	log.Printf("MITM HTTP server error for %s: %s", el.host, string(p))
+	return len(p), nil
+}
 
 type Handler struct {
 	ca         *CAStore
@@ -40,32 +49,44 @@ func NewHandler(ca *CAStore, transport *http.Transport, p policy.Engine, cls cla
 }
 
 func (h *Handler) HandleMITM(clientConn net.Conn, host string) {
-	defer clientConn.Close()
-
+	log.Printf("MITM: starting for %s", host)
 	cert, err := h.ca.GetLeafCert(normalizeHost(host))
 	if err != nil {
-		log.Printf("mitm cert error for %s: %v", host, err)
+		log.Printf("MITM: cert error for %s: %v", host, err)
+		_ = clientConn.Close()
 		return
 	}
 	tlsClient := tls.Server(clientConn, &tls.Config{Certificates: []tls.Certificate{*cert}})
 	if err := tlsClient.Handshake(); err != nil {
-		log.Printf("mitm client handshake failed for %s: %v", host, err)
+		log.Printf("MITM: handshake failed for %s: %v", host, err)
+		_ = tlsClient.Close()
 		return
 	}
-	defer tlsClient.Close()
 
-	srv := &http.Server{Handler: h.serverHandler(host), ReadHeaderTimeout: 10 * time.Second}
-	_ = srv.Serve(&singleConnListener{conn: tlsClient})
-	_ = srv.Shutdown(context.Background())
+	srv := &http.Server{
+		Handler:           h.serverHandler(host),
+		ReadHeaderTimeout: 10 * time.Second,
+		ErrorLog:          log.New(io.Writer(&errorLogger{host: host}), "", 0),
+	}
+	listener := &singleConnListener{conn: tlsClient}
+	_ = srv.Serve(listener)
+	log.Printf("MITM: completed for %s", host)
 }
 
 func (h *Handler) serverHandler(connectHost string) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		defer func() {
+			if rec := recover(); rec != nil {
+				log.Printf("MITM handler panic: %v", rec)
+			}
+		}()
 		host := normalizeHost(connectHost)
-		log.Printf("MITM request: %s %s", r.Method, r.URL)
+		log.Printf("MITM: handling request %s %s (connectHost=%s)", r.Method, r.URL.Path, connectHost)
 		_ = h.classifier.Classify(host)
 		decision := h.policy.Evaluate(host)
+		log.Printf("MITM: policy decision for %s: %s (reason: %s)", host, decision.Decision, decision.Reason)
 		if decision.Decision == policy.Block {
+			log.Printf("MITM: blocking request to %s", host)
 			http.Error(w, "blocked by PromptShield policy", http.StatusForbidden)
 			h.logAudit(r, host, decision, "", "")
 			return
@@ -81,6 +102,44 @@ func (h *Handler) serverHandler(connectHost string) http.Handler {
 		req.RequestURI = ""
 		req.Host = connectHost
 
+		// Remove hop-by-hop headers that shouldn't be forwarded
+		req.Header.Del("Connection")
+		req.Header.Del("Keep-Alive")
+		req.Header.Del("Proxy-Authenticate")
+		req.Header.Del("Proxy-Authorization")
+		req.Header.Del("TE")
+		req.Header.Del("Trailers")
+		req.Header.Del("Transfer-Encoding")
+		req.Header.Del("Upgrade")
+
+		// Ensure User-Agent is set to avoid Cloudflare challenges
+		if req.Header.Get("User-Agent") == "" {
+			req.Header.Set("User-Agent", "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
+		}
+
+		// Add browser-like headers to bypass Cloudflare challenges
+		if req.Header.Get("Accept") == "" {
+			req.Header.Set("Accept", "application/json, text/plain, */*")
+		}
+		if req.Header.Get("Accept-Language") == "" {
+			req.Header.Set("Accept-Language", "en-US,en;q=0.9")
+		}
+		if req.Header.Get("Accept-Encoding") == "" {
+			req.Header.Set("Accept-Encoding", "gzip, deflate, br")
+		}
+		if req.Header.Get("Referer") == "" {
+			req.Header.Set("Referer", "https://"+connectHost+"/")
+		}
+		if req.Header.Get("Sec-Fetch-Site") == "" {
+			req.Header.Set("Sec-Fetch-Site", "same-origin")
+		}
+		if req.Header.Get("Sec-Fetch-Mode") == "" {
+			req.Header.Set("Sec-Fetch-Mode", "cors")
+		}
+		if req.Header.Get("Sec-Fetch-Dest") == "" {
+			req.Header.Set("Sec-Fetch-Dest", "empty")
+		}
+
 		req, err = h.inspector.InspectRequest(req)
 		if err != nil {
 			http.Error(w, "request inspection failed", http.StatusBadRequest)
@@ -89,13 +148,16 @@ func (h *Handler) serverHandler(connectHost string) http.Handler {
 		if updatedPreview, ok := requestJSONPreview(req); ok {
 			reqPreview = updatedPreview
 		}
+		log.Printf("MITM: sending request to upstream: %s %s (Host: %s, User-Agent: %s)", req.Method, req.URL.String(), req.Host, req.Header.Get("User-Agent"))
 
 		resp, err := h.transport.RoundTrip(req)
 		if err != nil {
+			log.Printf("MITM: RoundTrip error for %s: %v", host, err)
 			http.Error(w, err.Error(), http.StatusBadGateway)
 			return
 		}
 		defer resp.Body.Close()
+		log.Printf("MITM: received response for %s: status=%d", host, resp.StatusCode)
 
 		resp, respPreview, err := cloneLimitedResponse(resp, maxBodySize)
 		if err != nil {
@@ -198,17 +260,24 @@ func readLimitedBody(rc io.ReadCloser, contentType string, limit int64) ([]byte,
 	return body, preview, nil
 }
 
-type singleConnListener struct{ conn net.Conn }
+type singleConnListener struct {
+	mu       sync.Mutex
+	conn     net.Conn
+	accepted bool
+}
 
 func (l *singleConnListener) Accept() (net.Conn, error) {
-	if l.conn == nil {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if l.accepted {
 		return nil, io.EOF
 	}
-	c := l.conn
-	l.conn = nil
-	return c, nil
+	l.accepted = true
+	return l.conn, nil
 }
-func (l *singleConnListener) Close() error { return nil }
+func (l *singleConnListener) Close() error {
+	return nil
+}
 func (l *singleConnListener) Addr() net.Addr {
 	return &net.TCPAddr{IP: net.ParseIP("127.0.0.1"), Port: 0}
 }

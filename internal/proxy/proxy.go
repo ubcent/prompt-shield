@@ -2,6 +2,7 @@ package proxy
 
 import (
 	"context"
+	"crypto/tls"
 	"errors"
 	"fmt"
 	"io"
@@ -35,7 +36,12 @@ type Proxy struct {
 }
 
 func New(addr string, p policy.Engine, c classifier.Classifier, a audit.Logger, mitmCfg config.MITM, sanitizerCfg config.Sanitizer) *Proxy {
-	transport := &http.Transport{Proxy: http.ProxyFromEnvironment}
+	transport := &http.Transport{
+		Proxy: http.ProxyFromEnvironment,
+		TLSClientConfig: &tls.Config{
+			InsecureSkipVerify: false,
+		},
+	}
 	pr := &Proxy{
 		transport:  transport,
 		policy:     p,
@@ -145,6 +151,7 @@ func (p *Proxy) handleConnect(w http.ResponseWriter, r *http.Request) {
 }
 
 func (p *Proxy) handleMITM(w http.ResponseWriter, r *http.Request, target string) {
+	log.Printf("handleMITM: starting for %s", target)
 	hijacker, ok := w.(http.Hijacker)
 	if !ok {
 		http.Error(w, "hijacking not supported", http.StatusInternalServerError)
@@ -152,11 +159,15 @@ func (p *Proxy) handleMITM(w http.ResponseWriter, r *http.Request, target string
 	}
 	clientConn, _, err := hijacker.Hijack()
 	if err != nil {
+		log.Printf("handleMITM: hijack failed for %s: %v", target, err)
 		return
 	}
 
+	log.Printf("handleMITM: sending 200 Connection Established to %s", target)
 	_, _ = clientConn.Write([]byte("HTTP/1.1 200 Connection Established\r\n\r\n"))
+	log.Printf("handleMITM: delegating to MITM handler for %s", target)
 	p.mitm.HandleMITM(clientConn, target)
+	log.Printf("handleMITM: completed for %s", target)
 }
 
 func (p *Proxy) handleTunnel(w http.ResponseWriter, target string) {
@@ -214,7 +225,8 @@ func (p *Proxy) shouldMITM(host string, decision policy.Result) bool {
 	}
 	needle := strings.ToLower(normalizeHost(host))
 	for _, domain := range p.mitmCfg.Domains {
-		if strings.EqualFold(strings.TrimSpace(domain), needle) {
+		domain = strings.ToLower(strings.TrimSpace(domain))
+		if needle == domain || strings.HasSuffix(needle, "."+domain) {
 			return true
 		}
 	}

@@ -125,6 +125,7 @@ func parseYAMLLite(r *strings.Reader, cfg *Config) error {
 	inMITMDomains := false
 	inSanitizer := false
 	inSanitizerTypes := false
+	rulesFound := false
 
 	for s.Scan() {
 		line := strings.TrimSpace(s.Text())
@@ -136,6 +137,10 @@ func parseYAMLLite(r *strings.Reader, cfg *Config) error {
 
 		switch {
 		case line == "rules:":
+			if !rulesFound {
+				cfg.Rules = nil
+				rulesFound = true
+			}
 			inSanitizer = false
 			inSanitizerTypes = false
 			inMITMDomains = false
