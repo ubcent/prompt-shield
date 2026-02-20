@@ -12,6 +12,7 @@ import (
 	"strings"
 
 	"promptshield/internal/notifier"
+	"promptshield/internal/session"
 )
 
 const defaultMaxBodyBytes int64 = 1 << 20
@@ -29,10 +30,11 @@ type SanitizingInspector struct {
 	sanitizer            *Sanitizer
 	maxBodySize          int64
 	notificationsEnabled bool
+	sessions             *session.Store
 }
 
 func NewSanitizingInspector(s *Sanitizer) *SanitizingInspector {
-	return &SanitizingInspector{sanitizer: s, maxBodySize: defaultMaxBodyBytes}
+	return &SanitizingInspector{sanitizer: s, maxBodySize: defaultMaxBodyBytes, sessions: session.NewStore()}
 }
 
 func (i *SanitizingInspector) WithNotifications(enabled bool) *SanitizingInspector {
@@ -67,14 +69,21 @@ func isTextContent(contentType string) bool {
 	ct := strings.ToLower(contentType)
 	return strings.Contains(ct, "application/json") ||
 		strings.Contains(ct, "text/plain") ||
-		strings.Contains(ct, "application/x-www-form-urlencoded")
+		strings.Contains(ct, "application/x-www-form-urlencoded") ||
+		strings.Contains(ct, "text/")
 }
+
+const sessionIDContextKey = "session_id"
 
 func (i *SanitizingInspector) InspectRequest(r *http.Request) (*http.Request, error) {
 	log.Printf("sanitizer: inspect request: %s %s (ContentLength=%d)", r.Method, r.URL, r.ContentLength)
 	if r == nil || i == nil || i.sanitizer == nil {
 		log.Printf("sanitizer: skipping - missing prerequisites")
 		return r, nil
+	}
+	sessionID := session.GenerateID()
+	if sessionID != "" {
+		r = r.WithContext(context.WithValue(r.Context(), sessionIDContextKey, sessionID))
 	}
 	if r.Method == http.MethodGet || r.Body == nil {
 		log.Printf("sanitizer: skipping - GET or no body")
@@ -92,8 +101,8 @@ func (i *SanitizingInspector) InspectRequest(r *http.Request) (*http.Request, er
 	if limit <= 0 {
 		limit = defaultMaxBodyBytes
 	}
-	if r.ContentLength > limit {
-		log.Printf("sanitizer: skipping - body too large (%d > %d)", r.ContentLength, limit)
+	if r.ContentLength > limit || r.ContentLength < 0 {
+		log.Printf("sanitizer: skipping - unsupported body size (%d)", r.ContentLength)
 		return r, nil
 	}
 
@@ -114,8 +123,16 @@ func (i *SanitizingInspector) InspectRequest(r *http.Request) (*http.Request, er
 	restoreBody(r, newBody)
 	if len(items) > 0 {
 		log.Printf("sanitizer: found %d sensitive items: %v", len(items), uniqueTypes(items))
+		mapping := make(map[string]string, len(items))
+		for _, item := range items {
+			mapping[item.Placeholder] = item.Original
+		}
+		i.sessions.Set(sessionID, mapping)
 		if i.notificationsEnabled {
-			msg := fmt.Sprintf("Sensitive data detected: %s", strings.Join(uniqueTypes(items), ", "))
+			msg := fmt.Sprintf(
+				"Detected: %s\nMasked before sending and restored locally",
+				strings.Join(uniqueTypes(items), ", "),
+			)
 			log.Printf("sanitizer: sending notification: %s", msg)
 			notifier.Notify("PromptShield", msg)
 		}
@@ -144,6 +161,51 @@ func uniqueTypes(items []SanitizedItem) []string {
 }
 
 func (i *SanitizingInspector) InspectResponse(r *http.Response) (*http.Response, error) {
+	if r == nil || i == nil || i.sessions == nil {
+		return r, nil
+	}
+	if strings.Contains(strings.ToLower(r.Header.Get("Content-Type")), "text/event-stream") {
+		return r, nil
+	}
+	if !isTextContent(r.Header.Get("Content-Type")) {
+		return r, nil
+	}
+	limit := i.maxBodySize
+	if limit <= 0 {
+		limit = defaultMaxBodyBytes
+	}
+	if r.ContentLength > limit || r.ContentLength < 0 {
+		return r, nil
+	}
+	if r.Request == nil {
+		return r, nil
+	}
+	sessionID, _ := r.Request.Context().Value(sessionIDContextKey).(string)
+	if sessionID == "" {
+		return r, nil
+	}
+	defer i.sessions.Delete(sessionID)
+	sess, ok := i.sessions.Get(sessionID)
+	if !ok || len(sess.Mapping) == 0 || r.Body == nil {
+		return r, nil
+	}
+	body, err := io.ReadAll(io.LimitReader(r.Body, limit+1))
+	if err != nil {
+		return r, nil
+	}
+	_ = r.Body.Close()
+	if int64(len(body)) > limit {
+		return r, nil
+	}
+	restored := string(body)
+	for placeholder, original := range sess.Mapping {
+		restored = strings.ReplaceAll(restored, placeholder, original)
+	}
+	newBody := []byte(restored)
+	r.Body = io.NopCloser(bytes.NewReader(newBody))
+	r.ContentLength = int64(len(newBody))
+	r.Header.Set("Content-Length", strconv.Itoa(len(newBody)))
+	r.Header.Del("Transfer-Encoding")
 	return r, nil
 }
 
