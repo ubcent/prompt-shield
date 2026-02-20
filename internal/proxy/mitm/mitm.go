@@ -181,6 +181,15 @@ func (h *Handler) serverHandler(connectHost string) http.Handler {
 		defer resp.Body.Close()
 		log.Printf("MITM: received response for %s: status=%d", host, resp.StatusCode)
 
+		if isStreamingResponse(resp) {
+			log.Printf("MITM: streaming detected, skipping restore (sessionID=%s)", sessionID)
+			copyHeader(w.Header(), resp.Header)
+			w.WriteHeader(resp.StatusCode)
+			_, _ = io.Copy(w, resp.Body)
+			h.logAudit(req, host, decision, reqPreview, "")
+			return
+		}
+
 		if resp.ContentLength > maxBodySize || resp.ContentLength < 0 {
 			log.Printf("MITM: skipping response inspection due to size (content-length=%d)", resp.ContentLength)
 			copyHeader(w.Header(), resp.Header)
@@ -225,7 +234,7 @@ func (h *Handler) restoreResponse(resp *http.Response, sessionID string) *http.R
 	// Skip streaming/event-stream content
 	contentType := strings.ToLower(resp.Header.Get("Content-Type"))
 	if strings.Contains(contentType, "text/event-stream") {
-		log.Printf("MITM: skipping restore for event-stream response (sessionID=%s)", sessionID)
+		log.Printf("MITM: streaming detected, skipping restore (sessionID=%s)", sessionID)
 		return resp
 	}
 
@@ -300,6 +309,14 @@ func (h *Handler) logAudit(r *http.Request, host string, decision policy.Result,
 		}
 	}
 	_ = h.audit.Log(entry)
+}
+
+func isStreamingResponse(resp *http.Response) bool {
+	if resp == nil {
+		return false
+	}
+	contentType := strings.ToLower(resp.Header.Get("Content-Type"))
+	return strings.Contains(contentType, "text/event-stream")
 }
 
 func requestJSONPreview(r *http.Request) (string, bool) {

@@ -36,6 +36,21 @@ func (rewriteInspector) InspectResponse(r *http.Response) (*http.Response, error
 	return r, nil
 }
 
+type countingInspector struct {
+	requestCalls  int
+	responseCalls int
+}
+
+func (i *countingInspector) InspectRequest(r *http.Request) (*http.Request, error) {
+	i.requestCalls++
+	return r, nil
+}
+
+func (i *countingInspector) InspectResponse(r *http.Response) (*http.Response, error) {
+	i.responseCalls++
+	return r, nil
+}
+
 func TestCAStoreRootAndLeafCertificate(t *testing.T) {
 	dir := t.TempDir()
 	store := NewCAStore(dir)
@@ -225,4 +240,49 @@ func TestSanitizerRestoresResponseBody(t *testing.T) {
 
 	t.Logf("✓ Request sanitization: %s -> [EMAIL_1]", originalEmail)
 	t.Logf("✓ Response restoration: [EMAIL_1] -> %s", originalEmail)
+}
+
+func TestStreamingResponseSkipsInspectionAndRestore(t *testing.T) {
+	inspector := &countingInspector{}
+
+	upstream := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte("data: hello\n\n"))
+		if f, ok := w.(http.Flusher); ok {
+			f.Flush()
+		}
+		_, _ = w.Write([]byte("data: world\n\n"))
+	}))
+	defer upstream.Close()
+
+	h := NewHandler(
+		NewCAStore(t.TempDir()),
+		&http.Transport{TLSClientConfig: &tls.Config{InsecureSkipVerify: true}},
+		policy.NewRuleEngine(nil),
+		classifier.HostClassifier{},
+		nil,
+		inspector,
+	)
+
+	req := httptest.NewRequest(http.MethodGet, "https://proxy/", nil)
+	rec := httptest.NewRecorder()
+
+	h.serverHandler(upstream.Listener.Addr().String()).ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", rec.Code)
+	}
+	if inspector.requestCalls != 1 {
+		t.Fatalf("InspectRequest calls = %d, want 1", inspector.requestCalls)
+	}
+	if inspector.responseCalls != 0 {
+		t.Fatalf("InspectResponse calls = %d, want 0 for event-stream", inspector.responseCalls)
+	}
+	if got := rec.Header().Get("Content-Type"); !strings.Contains(strings.ToLower(got), "text/event-stream") {
+		t.Fatalf("content-type = %q, want text/event-stream", got)
+	}
+	if got := rec.Body.String(); got != "data: hello\n\ndata: world\n\n" {
+		t.Fatalf("stream body mismatch: %q", got)
+	}
 }
