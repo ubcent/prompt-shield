@@ -1,210 +1,146 @@
-# PromptShield
+# PromptShield — AI Traffic Firewall for Developers
 
-PromptShield is a local security agent for AI/LLM traffic with:
+PromptShield is a local proxy that monitors, controls, and sanitizes AI/LLM traffic.
 
-- local HTTP/HTTPS proxy
-- selective MITM interception
-- policy engine (allow/block/mitm)
-- request/response sanitizer
-- JSONL audit logging
+## Problem
 
-## 🚀 Quick Start
+Developers regularly send prompts, code snippets, and tokens to services such as ChatGPT, Copilot, and other LLM APIs. Without an explicit control point, teams have limited visibility into what leaves developer machines, and limited ability to enforce policy before data is sent. This creates practical security and compliance risks:
 
-### 1. Установка
+- accidental leakage of secrets or internal code
+- unmanaged access to external AI endpoints
+- poor auditability for incident response or governance
+
+## Solution
+
+PromptShield runs locally as a security proxy between developer tools and LLM providers. It can:
+
+- intercept outbound traffic
+- apply policy decisions (`allow`, `block`, `mitm`)
+- optionally inspect and sanitize request content
+- produce structured audit logs for traceability
+
+## Key Features
+
+- HTTP/HTTPS proxy for local AI traffic control
+- selective MITM (TLS interception) per configured domains
+- policy engine with `allow` / `block` / `mitm` actions
+- prompt sanitization for PII and common secret patterns
+- JSONL audit logging for security analysis
+- system proxy integration on macOS (`psctl proxy on`)
+
+## Architecture (Short)
+
+```text
+App → PromptShield → LLM APIs
+```
+
+PromptShield consists of four core layers:
+
+- **Proxy layer**: receives HTTP/HTTPS traffic from local clients
+- **Policy engine**: evaluates host-based rules and decides action
+- **Sanitizer**: redacts configured sensitive data patterns during inspected flows
+- **Audit logger**: stores request events as JSONL records
+
+For deeper details, see [docs/architecture.md](docs/architecture.md).
+
+## Quick Start
+
+### 1) Build
 
 ```bash
-git clone <repo-url>
-cd promptshield
 go build ./cmd/psd
 go build ./cmd/psctl
 ```
 
-### 2. Генерация root CA
+### 2) Generate local CA
 
 ```bash
 ./psctl ca init
 ```
 
-### 3. Установка сертификата (macOS)
+### 3) Install certificate (macOS)
 
-```bash
-open ~/.promptshield/ca/cert.pem
-```
+1. Open the generated certificate:
+   ```bash
+   open ~/.promptshield/ca/cert.pem
+   ```
+2. Add it to **Keychain Access**.
+3. Open the certificate trust settings.
+4. Set **When using this certificate** to **Always Trust**.
 
-Дальше:
-
-- добавить сертификат в Keychain
-- выбрать сертификат и установить Trust = **Always Trust**
-
-### 4. Запуск proxy
+### 4) Start proxy
 
 ```bash
 ./psctl start
 ```
 
-По умолчанию proxy доступен на:
+Default listener:
 
 ```text
 http://localhost:8080
 ```
 
-При запуске `psctl start` выводит:
-
-```text
-PromptShield started (pid=12345)
-Proxy: http://localhost:8080
-MITM: enabled|disabled
-Sanitizer: enabled|disabled
-Daemon log: ~/.promptshield/daemon.log
-Log file: ~/.promptshield/audit.log
-```
-
-### 5. Настройка proxy
-
-#### Временная (через env)
+### 5) Enable system proxy (macOS)
 
 ```bash
-export HTTP_PROXY=http://localhost:8080
-export HTTPS_PROXY=http://localhost:8080
+./psctl proxy on
 ```
 
-#### Или в браузере
-
-- System Settings → Network → Proxy
-
-### 6. Проверка (без MITM)
+You can verify status with:
 
 ```bash
-curl -x http://localhost:8080 https://example.com
+./psctl proxy status
 ```
 
-### 7. Проверка MITM
+## Demo
 
 ```bash
-curl -x http://localhost:8080 https://api.openai.com -k
+curl https://api.openai.com/v1/models \
+  -H "Authorization: Bearer sk-123..."
 ```
 
-Ожидается:
+When your system or shell proxy points to PromptShield:
 
-- proxy видит HTTP-запрос после расшифровки TLS
-- запрос попадает в audit log
+- the request is routed through the local proxy
+- policy rules are evaluated for `api.openai.com`
+- sensitive values can be masked in logged metadata
 
-### 8. Проверка sanitizer
+## Example Output
 
-```bash
-curl -x http://localhost:8080 https://example.com \
-  -d '{"email":"test@example.com"}'
+Example audit event (JSONL):
+
+```json
+{
+  "ts": "2026-01-14T10:22:31Z",
+  "method": "POST",
+  "host": "api.openai.com",
+  "path": "/v1/chat/completions",
+  "decision": "mitm",
+  "sanitized": true,
+  "sanitized_items": ["api_key", "email"],
+  "status": 200,
+  "latency_ms": 241
+}
 ```
 
-Ожидается:
+## Configuration
 
-- email маскируется sanitizer-ом
-- в audit появляется `sanitized_items`
+See [docs/configuration.md](docs/configuration.md) for full configuration reference and policy examples.
 
-### 9. Просмотр логов
+## Security
 
-```bash
-./psctl logs
-```
+- MITM inspection is optional and domain-scoped.
+- Processing is local to your machine.
+- PromptShield does not require remote control-plane services for core operation.
 
-## 🧪 Demo scenario
+Read the full security guidance in [docs/security.md](docs/security.md).
 
-1. Включите правило block для `openai.com` в `~/.promptshield/config.yaml`:
+## Roadmap
 
-```yaml
-rules:
-  - id: block-openai
-    match:
-      host_contains: openai.com
-    action: block
-```
+- system-level network agent mode (VPN/TUN)
+- VS Code extension for developer workflow visibility
+- enterprise policy packs, identity integration, and centralized audit shipping
 
-2. Выполните запрос:
+## Disclaimer
 
-```bash
-curl -x http://localhost:8080 https://api.openai.com
-```
-
-3. Ожидайте ответ `403` от proxy.
-
-## ⚙️ Config example
-
-```yaml
-port: 8080
-log_file: ~/.promptshield/audit.log
-
-mitm:
-  enabled: true
-  domains:
-    - api.openai.com
-    - example.com
-
-sanitizer:
-  enabled: true
-
-rules:
-  - id: block-openai
-    match:
-      host_contains: openai.com
-    action: block
-```
-
-Config path: `~/.promptshield/config.yaml`.
-
-## 🧾 CLI
-
-```bash
-./psctl start
-./psctl stop
-./psctl restart
-./psctl status
-./psctl logs
-./psctl ca init
-./psctl ca print
-```
-
-- `start` — запускает proxy как daemon.
-- `stop` — останавливает daemon через `SIGTERM` (и `SIGKILL`, если не завершился вовремя).
-- `restart` — перезапускает daemon (`stop` → `start`).
-- `status` — показывает running/stopped, PID, порт, состояние MITM/sanitizer и пути к логам.
-- `logs` — tail audit log (`~/.promptshield/audit.log`).
-- `ca init` — генерирует root CA в `~/.promptshield/ca/`.
-- `ca print` — печатает путь к сертификату и короткую инструкцию по установке.
-
-## 🛠️ Make targets
-
-```bash
-make build
-make run
-make test
-```
-
-## 📓 Audit log
-
-- файл: `~/.promptshield/audit.log`
-- создаётся автоматически
-- формат: JSONL (одна JSON запись на строку)
-
-## ⚠️ Troubleshooting
-
-### HTTPS не работает
-
-- проверьте, что root CA установлен
-- проверьте trust settings в системе/браузере
-
-### Proxy не используется
-
-- проверьте `HTTP_PROXY` и `HTTPS_PROXY`
-- проверьте системные proxy-настройки
-
-### MITM не срабатывает
-
-- проверьте `mitm.enabled: true`
-- проверьте `mitm.domains`
-- проверьте, что домен запроса совпадает
-
-### Debug
-
-```bash
-LOG_LEVEL=debug ./psctl start
-```
+PromptShield is a traffic interception tool. You should use it only in environments you trust and understand. Enabling HTTPS interception requires installing and trusting a local CA certificate. This project is intended for local development, security testing, and controlled internal usage.
