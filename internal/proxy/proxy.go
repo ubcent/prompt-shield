@@ -9,7 +9,6 @@ import (
 	"net"
 	"net/http"
 	"strings"
-	"sync"
 	"time"
 
 	"promptshield/internal/audit"
@@ -58,9 +57,7 @@ func New(addr string, p policy.Engine, c classifier.Classifier, a audit.Logger, 
 			pr.mitm = mitm.NewHandler(mitm.NewCAStore(baseDir), transport, p, c, a, inspector)
 		}
 	}
-	mux := http.NewServeMux()
-	mux.HandleFunc("/", pr.handle)
-	pr.httpServer = &http.Server{Addr: addr, Handler: mux}
+	pr.httpServer = &http.Server{Addr: addr, Handler: http.HandlerFunc(pr.handle)}
 	return pr
 }
 
@@ -128,33 +125,77 @@ func (p *Proxy) handleHTTP(w http.ResponseWriter, r *http.Request) {
 }
 
 func (p *Proxy) handleConnect(w http.ResponseWriter, r *http.Request, decision policy.Result) {
-	hj, ok := w.(http.Hijacker)
+	target := connectTarget(r.Host)
+	if target == "" {
+		http.Error(w, "missing CONNECT target", http.StatusBadRequest)
+		return
+	}
+
+	if p.shouldMITM(target, decision) {
+		log.Printf("CONNECT request to %s (mode=mitm)", target)
+		p.handleMITM(w, r, target)
+		return
+	}
+	log.Printf("CONNECT request to %s (mode=tunnel)", target)
+	p.handleTunnel(w, target)
+}
+
+func (p *Proxy) handleMITM(w http.ResponseWriter, r *http.Request, target string) {
+	hijacker, ok := w.(http.Hijacker)
 	if !ok {
 		http.Error(w, "hijacking not supported", http.StatusInternalServerError)
 		return
 	}
-	clientConn, _, err := hj.Hijack()
+	clientConn, _, err := hijacker.Hijack()
 	if err != nil {
 		return
 	}
 
 	_, _ = clientConn.Write([]byte("HTTP/1.1 200 Connection Established\r\n\r\n"))
-	if p.shouldMITM(r.Host, decision) {
-		p.mitm.HandleMITM(clientConn, r.Host)
-		return
-	}
+	p.mitm.HandleMITM(clientConn, target)
+}
 
-	dstConn, err := net.DialTimeout("tcp", r.Host, 10*time.Second)
+func (p *Proxy) handleTunnel(w http.ResponseWriter, target string) {
+	dstConn, err := net.DialTimeout("tcp", target, 10*time.Second)
 	if err != nil {
-		_ = clientConn.Close()
+		http.Error(w, "failed to connect upstream", http.StatusBadGateway)
 		return
 	}
 
-	var wg sync.WaitGroup
-	wg.Add(2)
-	go tunnel(&wg, dstConn, clientConn)
-	go tunnel(&wg, clientConn, dstConn)
-	wg.Wait()
+	hijacker, ok := w.(http.Hijacker)
+	if !ok {
+		_ = dstConn.Close()
+		http.Error(w, "hijacking not supported", http.StatusInternalServerError)
+		return
+	}
+	clientConn, _, err := hijacker.Hijack()
+	if err != nil {
+		_ = dstConn.Close()
+		return
+	}
+
+	if _, err := clientConn.Write([]byte("HTTP/1.1 200 Connection Established\r\n\r\n")); err != nil {
+		_ = clientConn.Close()
+		_ = dstConn.Close()
+		return
+	}
+
+	go tunnel(dstConn, clientConn)
+	tunnel(clientConn, dstConn)
+}
+
+func connectTarget(host string) string {
+	host = strings.TrimSpace(host)
+	if host == "" {
+		return ""
+	}
+	if _, _, err := net.SplitHostPort(host); err == nil {
+		return host
+	}
+	if strings.Contains(host, ":") {
+		return host
+	}
+	return net.JoinHostPort(host, "443")
 }
 
 func (p *Proxy) shouldMITM(host string, decision policy.Result) bool {
@@ -176,8 +217,7 @@ func (p *Proxy) shouldMITM(host string, decision policy.Result) bool {
 	return false
 }
 
-func tunnel(wg *sync.WaitGroup, dst net.Conn, src net.Conn) {
-	defer wg.Done()
+func tunnel(dst net.Conn, src net.Conn) {
 	defer dst.Close()
 	defer src.Close()
 	_, _ = io.Copy(dst, src)
