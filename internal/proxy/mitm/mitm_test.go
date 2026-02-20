@@ -144,3 +144,85 @@ func TestSanitizerInspectorRewritesSensitiveData(t *testing.T) {
 		t.Fatalf("expected sanitized body, got %q", body)
 	}
 }
+
+func TestSanitizerRestoresResponseBody(t *testing.T) {
+	// This test verifies the full round-trip:
+	// 1. Client sends request with sensitive data
+	// 2. Request is sanitized before going upstream (email -> [EMAIL_1])
+	// 3. Upstream echoes the request body in response
+	// 4. Response body is restored (placeholders -> original values)
+	// 5. Client receives the restored response with original values
+
+	var (
+		gotRequestBody []byte
+		mu             sync.Mutex
+	)
+
+	upstream := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		mu.Lock()
+		gotRequestBody = body
+		mu.Unlock()
+
+		w.Header().Set("Content-Type", "application/json")
+		// Echo the request back in the response
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write(body)
+	}))
+	defer upstream.Close()
+
+	s := sanitizer.New([]sanitizer.Detector{sanitizer.EmailDetector{}})
+	inspector := sanitizer.NewSanitizingInspector(s)
+
+	h := NewHandler(
+		NewCAStore(t.TempDir()),
+		&http.Transport{TLSClientConfig: &tls.Config{InsecureSkipVerify: true}},
+		policy.NewRuleEngine(nil),
+		classifier.HostClassifier{},
+		nil,
+		inspector,
+	)
+
+	// Wire the handler's sessions store to the inspector so restore works
+	inspector.WithSessions(h.sessions)
+
+	originalEmail := "dvbondarchuk@gmail.com"
+	originalBody := `{"email":"` + originalEmail + `"}`
+
+	req := httptest.NewRequest(http.MethodPost, "https://proxy/", bytes.NewBufferString(originalBody))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+
+	h.serverHandler(upstream.Listener.Addr().String()).ServeHTTP(rec, req)
+
+	// Verify upstream received sanitized request
+	mu.Lock()
+	upstreamBody := string(gotRequestBody)
+	mu.Unlock()
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", rec.Code)
+	}
+
+	if !strings.Contains(upstreamBody, "[EMAIL_1]") {
+		t.Fatalf("upstream should receive sanitized body with [EMAIL_1], got %q", upstreamBody)
+	}
+
+	if strings.Contains(upstreamBody, originalEmail) {
+		t.Fatalf("upstream should NOT receive original email, but got %q", upstreamBody)
+	}
+
+	// Verify client received restored response
+	clientBody := rec.Body.String()
+
+	if !strings.Contains(clientBody, originalEmail) {
+		t.Fatalf("client response should contain original email %q, got %q", originalEmail, clientBody)
+	}
+
+	if strings.Contains(clientBody, "[EMAIL_1]") {
+		t.Fatalf("client response should NOT contain placeholder [EMAIL_1], got %q", clientBody)
+	}
+
+	t.Logf("✓ Request sanitization: %s -> [EMAIL_1]", originalEmail)
+	t.Logf("✓ Response restoration: [EMAIL_1] -> %s", originalEmail)
+}

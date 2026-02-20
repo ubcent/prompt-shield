@@ -42,6 +42,13 @@ func (i *SanitizingInspector) WithNotifications(enabled bool) *SanitizingInspect
 	return i
 }
 
+func (i *SanitizingInspector) WithSessions(store *session.Store) *SanitizingInspector {
+	if store != nil {
+		i.sessions = store
+	}
+	return i
+}
+
 func readBodySafe(r *http.Request, maxSize int64) ([]byte, error) {
 	if r.Body == nil {
 		return nil, nil
@@ -73,7 +80,9 @@ func isTextContent(contentType string) bool {
 		strings.Contains(ct, "text/")
 }
 
-const sessionIDContextKey = "session_id"
+type sessionIDContextKeyType struct{}
+
+var sessionIDContextKey = sessionIDContextKeyType{}
 
 func (i *SanitizingInspector) InspectRequest(r *http.Request) (*http.Request, error) {
 	log.Printf("sanitizer: inspect request: %s %s (ContentLength=%d)", r.Method, r.URL, r.ContentLength)
@@ -81,10 +90,17 @@ func (i *SanitizingInspector) InspectRequest(r *http.Request) (*http.Request, er
 		log.Printf("sanitizer: skipping - missing prerequisites")
 		return r, nil
 	}
-	sessionID := session.GenerateID()
-	if sessionID != "" {
-		r = r.WithContext(context.WithValue(r.Context(), sessionIDContextKey, sessionID))
+
+	// Try to get sessionID from context (set by MITM handler), or generate a new one
+	sessionID := session.GetIDFromContext(r.Context())
+	if sessionID == "" {
+		sessionID = session.GenerateID()
+		if sessionID != "" {
+			r = r.WithContext(session.ContextWithID(r.Context(), sessionID))
+		}
 	}
+	log.Printf("sanitizer: using sessionID=%s", sessionID)
+
 	if r.Method == http.MethodGet || r.Body == nil {
 		log.Printf("sanitizer: skipping - GET or no body")
 		return r, nil
@@ -180,11 +196,12 @@ func (i *SanitizingInspector) InspectResponse(r *http.Response) (*http.Response,
 	if r.Request == nil {
 		return r, nil
 	}
-	sessionID, _ := r.Request.Context().Value(sessionIDContextKey).(string)
+	sessionID := session.GetIDFromContext(r.Request.Context())
 	if sessionID == "" {
 		return r, nil
 	}
-	defer i.sessions.Delete(sessionID)
+	// Note: Do not delete the session here - let the MITM handler manage the lifecycle
+	// to ensure the mapping is available for response restoration
 	sess, ok := i.sessions.Get(sessionID)
 	if !ok || len(sess.Mapping) == 0 || r.Body == nil {
 		return r, nil

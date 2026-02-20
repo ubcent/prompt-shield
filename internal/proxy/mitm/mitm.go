@@ -8,6 +8,7 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -16,6 +17,7 @@ import (
 	"promptshield/internal/classifier"
 	"promptshield/internal/policy"
 	"promptshield/internal/sanitizer"
+	"promptshield/internal/session"
 )
 
 const (
@@ -39,13 +41,14 @@ type Handler struct {
 	policy     policy.Engine
 	classifier classifier.Classifier
 	audit      audit.Logger
+	sessions   *session.Store
 }
 
 func NewHandler(ca *CAStore, transport *http.Transport, p policy.Engine, cls classifier.Classifier, logger audit.Logger, insp Inspector) *Handler {
 	if insp == nil {
 		insp = PassthroughInspector{}
 	}
-	return &Handler{ca: ca, transport: transport, policy: p, classifier: cls, audit: logger, inspector: insp}
+	return &Handler{ca: ca, transport: transport, policy: p, classifier: cls, audit: logger, inspector: insp, sessions: session.NewStore()}
 }
 
 func (h *Handler) HandleMITM(clientConn net.Conn, host string) {
@@ -82,6 +85,14 @@ func (h *Handler) serverHandler(connectHost string) http.Handler {
 		}()
 		host := normalizeHost(connectHost)
 		log.Printf("MITM: handling request %s %s (connectHost=%s)", r.Method, r.URL.Path, connectHost)
+
+		// Generate sessionID early to track this request/response pair
+		sessionID := session.GenerateID()
+		log.Printf("MITM: sessionID=%s", sessionID)
+
+		// Add sessionID to request context
+		r = r.WithContext(session.ContextWithID(r.Context(), sessionID))
+
 		_ = h.classifier.Classify(host)
 		decision := h.policy.Evaluate(host)
 		log.Printf("MITM: policy decision for %s: %s (reason: %s)", host, decision.Decision, decision.Reason)
@@ -173,11 +184,90 @@ func (h *Handler) serverHandler(connectHost string) http.Handler {
 			return
 		}
 
+		// Restore response if we have a mapping for this session
+		resp = h.restoreResponse(resp, sessionID)
+		defer h.sessions.Delete(sessionID)
+
 		copyHeader(w.Header(), resp.Header)
 		w.WriteHeader(resp.StatusCode)
 		_, _ = io.Copy(w, resp.Body)
 		h.logAudit(req, host, decision, reqPreview, respPreview)
 	})
+}
+
+func (h *Handler) restoreResponse(resp *http.Response, sessionID string) *http.Response {
+	if resp == nil || sessionID == "" || h.sessions == nil {
+		return resp
+	}
+
+	// Skip if no content
+	if resp.Body == nil {
+		return resp
+	}
+
+	// Skip streaming/event-stream content
+	contentType := strings.ToLower(resp.Header.Get("Content-Type"))
+	if strings.Contains(contentType, "text/event-stream") {
+		log.Printf("MITM: skipping restore for event-stream response (sessionID=%s)", sessionID)
+		return resp
+	}
+
+	// Skip non-text content types
+	if !isTextContentType(contentType) {
+		log.Printf("MITM: skipping restore for non-text content (sessionID=%s, type=%s)", sessionID, resp.Header.Get("Content-Type"))
+		return resp
+	}
+
+	// Check content length
+	limit := int64(maxBodySize)
+	if resp.ContentLength > limit || resp.ContentLength < 0 {
+		log.Printf("MITM: skipping restore due to content length (sessionID=%s, len=%d)", sessionID, resp.ContentLength)
+		return resp
+	}
+
+	// Get the session mapping
+	sess, ok := h.sessions.Get(sessionID)
+	if !ok || len(sess.Mapping) == 0 {
+		log.Printf("MITM: no session mapping found (sessionID=%s)", sessionID)
+		return resp
+	}
+
+	log.Printf("MITM: restoring response (sessionID=%s, placeholders=%d)", sessionID, len(sess.Mapping))
+
+	// Read response body
+	body, err := io.ReadAll(io.LimitReader(resp.Body, limit+1))
+	if err != nil {
+		log.Printf("MITM: failed to read response body for restore (sessionID=%s): %v", sessionID, err)
+		resp.Body = io.NopCloser(bytes.NewReader(body))
+		return resp
+	}
+
+	if int64(len(body)) > limit {
+		log.Printf("MITM: response body exceeds limit for restore (sessionID=%s)", sessionID)
+		resp.Body = io.NopCloser(bytes.NewReader(body))
+		return resp
+	}
+
+	// Apply restoration
+	restored := string(body)
+	originalCount := 0
+	for placeholder, original := range sess.Mapping {
+		if strings.Contains(restored, placeholder) {
+			restored = strings.ReplaceAll(restored, placeholder, original)
+			originalCount++
+			log.Printf("MITM: restored %s (sessionID=%s)", placeholder, sessionID)
+		}
+	}
+
+	// Update response body and headers
+	newBody := []byte(restored)
+	resp.Body = io.NopCloser(bytes.NewReader(newBody))
+	resp.ContentLength = int64(len(newBody))
+	resp.Header.Set("Content-Length", strconv.Itoa(len(newBody)))
+	resp.Header.Del("Transfer-Encoding")
+
+	log.Printf("MITM: restore complete (sessionID=%s, placeholders_found=%d)", sessionID, originalCount)
+	return resp
 }
 
 func (h *Handler) logAudit(r *http.Request, host string, decision policy.Result, reqPreview, respPreview string) {
@@ -303,4 +393,12 @@ func copyHeader(dst, src http.Header) {
 
 func HandleMITM(w http.ResponseWriter, r *http.Request) {
 	http.Error(w, "standalone MITM handler is not wired", http.StatusNotImplemented)
+}
+
+func isTextContentType(ct string) bool {
+	ct = strings.ToLower(ct)
+	return strings.Contains(ct, "application/json") ||
+		strings.Contains(ct, "text/plain") ||
+		strings.Contains(ct, "application/x-www-form-urlencoded") ||
+		strings.Contains(ct, "text/")
 }
