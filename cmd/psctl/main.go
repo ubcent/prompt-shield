@@ -2,6 +2,7 @@ package main
 
 import (
 	"bufio"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -31,6 +32,10 @@ func main() {
 	switch cmd {
 	case "start":
 		err = startDaemon()
+	case "stop":
+		err = stopDaemon()
+	case "restart":
+		err = restartDaemon()
 	case "status":
 		err = status()
 	case "logs":
@@ -48,7 +53,7 @@ func main() {
 }
 
 func usage() {
-	fmt.Println("Usage: psctl [start|status|logs|ca init|ca print]")
+	fmt.Println("Usage: psctl [start|stop|restart|status|logs|ca init|ca print]")
 }
 
 func loadConfig() (config.Config, error) {
@@ -73,7 +78,7 @@ func startDaemon() error {
 
 	running, pid := processStatus()
 	if running {
-		fmt.Printf("PromptShield is already running (pid %d)\n", pid)
+		fmt.Printf("PromptShield already running (pid=%d)\n", pid)
 		return nil
 	}
 
@@ -101,16 +106,70 @@ func startDaemon() error {
 		return err
 	}
 	if err := os.WriteFile(pidFilePath(), []byte(fmt.Sprintf("%d\n", cmd.Process.Pid)), 0o644); err != nil {
+		_ = cmd.Process.Kill()
 		return err
 	}
 
-	fmt.Println("PromptShield started")
+	fmt.Printf("PromptShield started (pid=%d)\n", cmd.Process.Pid)
 	fmt.Printf("Proxy: http://localhost:%d\n", cfg.Port)
 	fmt.Printf("MITM: %s\n", enabledLabel(cfg.MITM.Enabled))
 	fmt.Printf("Sanitizer: %s\n", enabledLabel(cfg.Sanitizer.Enabled))
 	fmt.Printf("Config: %s\n", mustConfigPath())
+	fmt.Printf("Daemon log: %s\n", stdoutLog)
 	fmt.Printf("Log file: %s\n", cfg.LogFile)
 	return nil
+}
+
+func stopDaemon() error {
+	pid, err := readPID()
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			fmt.Println("PromptShield not running")
+			return nil
+		}
+		return err
+	}
+
+	if !isProcessRunning(pid) {
+		_ = os.Remove(pidFilePath())
+		fmt.Println("PromptShield not running")
+		return nil
+	}
+
+	proc, err := os.FindProcess(pid)
+	if err != nil {
+		return err
+	}
+	if err := proc.Signal(syscall.SIGTERM); err != nil && !errors.Is(err, os.ErrProcessDone) {
+		return err
+	}
+
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		if !isProcessRunning(pid) {
+			break
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+
+	if isProcessRunning(pid) {
+		if err := proc.Signal(syscall.SIGKILL); err != nil && !errors.Is(err, os.ErrProcessDone) {
+			return err
+		}
+	}
+
+	if err := os.Remove(pidFilePath()); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+	fmt.Printf("PromptShield stopped (pid=%d)\n", pid)
+	return nil
+}
+
+func restartDaemon() error {
+	if err := stopDaemon(); err != nil {
+		return err
+	}
+	return startDaemon()
 }
 
 func status() error {
@@ -120,13 +179,20 @@ func status() error {
 	}
 	running, pid := processStatus()
 	if !running {
-		fmt.Println("PromptShield is not running")
+		fmt.Println("Status: stopped")
 	} else {
-		fmt.Printf("PromptShield is running (pid %d)\n", pid)
+		fmt.Println("Status: running")
+		fmt.Printf("PID: %d\n", pid)
 	}
 	fmt.Printf("Port: %d\n", cfg.Port)
 	fmt.Printf("MITM: %s\n", enabledLabel(cfg.MITM.Enabled))
 	fmt.Printf("Sanitizer: %s\n", enabledLabel(cfg.Sanitizer.Enabled))
+	fmt.Printf("Log file: %s\n", cfg.LogFile)
+	stdoutLog, err := daemonLogPath()
+	if err != nil {
+		return err
+	}
+	fmt.Printf("Daemon log: %s\n", stdoutLog)
 	return nil
 }
 
@@ -230,30 +296,46 @@ func daemonCommand() (*exec.Cmd, error) {
 }
 
 func processStatus() (bool, int) {
-	pidData, err := os.ReadFile(pidFilePath())
+	pid, err := readPID()
 	if err != nil {
 		return false, 0
 	}
-	pid, err := strconv.Atoi(strings.TrimSpace(string(pidData)))
-	if err != nil || pid <= 0 {
-		return false, 0
-	}
-	proc, err := os.FindProcess(pid)
-	if err != nil {
-		return false, 0
-	}
-	if err := proc.Signal(syscall.Signal(0)); err != nil {
+	if !isProcessRunning(pid) {
+		_ = os.Remove(pidFilePath())
 		return false, 0
 	}
 	return true, pid
 }
 
+func readPID() (int, error) {
+	pidData, err := os.ReadFile(pidFilePath())
+	if err != nil {
+		return 0, err
+	}
+	pid, err := strconv.Atoi(strings.TrimSpace(string(pidData)))
+	if err != nil || pid <= 0 {
+		return 0, fmt.Errorf("invalid pid file")
+	}
+	return pid, nil
+}
+
+func isProcessRunning(pid int) bool {
+	proc, err := os.FindProcess(pid)
+	if err != nil {
+		return false
+	}
+	if err := proc.Signal(syscall.Signal(0)); err != nil {
+		return false
+	}
+	return true
+}
+
 func pidFilePath() string {
 	home, err := os.UserHomeDir()
 	if err != nil {
-		return ".promptshield/psd.pid"
+		return ".promptshield/promptshield.pid"
 	}
-	return filepath.Join(home, ".promptshield", "psd.pid")
+	return filepath.Join(home, ".promptshield", "promptshield.pid")
 }
 
 func daemonLogPath() (string, error) {
@@ -261,7 +343,7 @@ func daemonLogPath() (string, error) {
 	if err != nil {
 		return "", err
 	}
-	return filepath.Join(home, ".promptshield", "psd.log"), nil
+	return filepath.Join(home, ".promptshield", "daemon.log"), nil
 }
 
 func enabledLabel(v bool) string {

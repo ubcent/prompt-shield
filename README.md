@@ -51,10 +51,11 @@ http://localhost:8080
 При запуске `psctl start` выводит:
 
 ```text
-PromptShield started
+PromptShield started (pid=12345)
 Proxy: http://localhost:8080
 MITM: enabled|disabled
 Sanitizer: enabled|disabled
+Daemon log: ~/.promptshield/daemon.log
 Log file: ~/.promptshield/audit.log
 ```
 
@@ -154,6 +155,8 @@ Config path: `~/.promptshield/config.yaml`.
 
 ```bash
 ./psctl start
+./psctl stop
+./psctl restart
 ./psctl status
 ./psctl logs
 ./psctl ca init
@@ -161,7 +164,9 @@ Config path: `~/.promptshield/config.yaml`.
 ```
 
 - `start` — запускает proxy как daemon.
-- `status` — показывает, запущен ли proxy, порт, состояние MITM/sanitizer.
+- `stop` — останавливает daemon через `SIGTERM` (и `SIGKILL`, если не завершился вовремя).
+- `restart` — перезапускает daemon (`stop` → `start`).
+- `status` — показывает running/stopped, PID, порт, состояние MITM/sanitizer и пути к логам.
 - `logs` — tail audit log (`~/.promptshield/audit.log`).
 - `ca init` — генерирует root CA в `~/.promptshield/ca/`.
 - `ca print` — печатает путь к сертификату и короткую инструкцию по установке.
