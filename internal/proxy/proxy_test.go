@@ -1,16 +1,19 @@
 package proxy
 
 import (
+	"bufio"
 	"context"
 	"crypto/tls"
 	"crypto/x509"
 	"encoding/json"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -128,6 +131,42 @@ func TestProxyShouldMITMDecision(t *testing.T) {
 	}
 	if pr.shouldMITM("example.com:443", policy.Result{Decision: policy.MITM}) {
 		t.Fatalf("did not expect MITM for non-configured domain")
+	}
+}
+
+func TestProxyConnectReturnsEstablishedInsteadOfRedirect(t *testing.T) {
+	_, proxySrv := newTestProxy(t, policy.NewRuleEngine(nil), &memoryAudit{}, config.MITM{}, config.Sanitizer{}, t.TempDir())
+	defer proxySrv.Close()
+
+	upstream, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen upstream: %v", err)
+	}
+	defer upstream.Close()
+	go func() {
+		conn, err := upstream.Accept()
+		if err == nil {
+			_ = conn.Close()
+		}
+	}()
+
+	proxyAddr := strings.TrimPrefix(proxySrv.URL, "http://")
+	conn, err := net.Dial("tcp", proxyAddr)
+	if err != nil {
+		t.Fatalf("dial proxy: %v", err)
+	}
+	defer conn.Close()
+
+	if _, err := conn.Write([]byte("CONNECT " + upstream.Addr().String() + " HTTP/1.1\r\nHost: " + upstream.Addr().String() + "\r\n\r\n")); err != nil {
+		t.Fatalf("write connect request: %v", err)
+	}
+
+	statusLine, err := bufio.NewReader(conn).ReadString('\n')
+	if err != nil {
+		t.Fatalf("read connect response: %v", err)
+	}
+	if !strings.Contains(statusLine, "200") {
+		t.Fatalf("expected CONNECT 200, got %q", strings.TrimSpace(statusLine))
 	}
 }
 
