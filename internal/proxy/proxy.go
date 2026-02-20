@@ -31,6 +31,7 @@ type Proxy struct {
 	policy     policy.Engine
 	classifier classifier.Classifier
 	audit      audit.Logger
+	inspector  mitm.Inspector
 	mitm       *mitm.Handler
 	mitmCfg    config.MITM
 }
@@ -47,20 +48,23 @@ func New(addr string, p policy.Engine, c classifier.Classifier, a audit.Logger, 
 		policy:     p,
 		classifier: c,
 		audit:      a,
+		inspector:  mitm.PassthroughInspector{},
 		mitmCfg:    mitmCfg,
 	}
+	inspector := pr.inspector
+	if sanitizerCfg.Enabled {
+		log.Printf("proxy: initializing SanitizingInspector (notificationsEnabled=%v)", notificationCfg.Enabled)
+		detectors := sanitizer.DetectorsByName(sanitizerCfg.Types)
+		s := sanitizer.New(detectors).WithConfidenceThreshold(sanitizerCfg.ConfidenceThreshold).WithMaxReplacements(sanitizerCfg.MaxReplacements)
+		inspector = sanitizer.NewSanitizingInspector(s).WithNotifications(notificationCfg.Enabled)
+	}
+	pr.inspector = inspector
+
 	if mitmCfg.Enabled {
 		baseDir, err := mitm.DefaultCAPath()
 		if err != nil {
 			log.Printf("mitm disabled: cannot resolve CA path: %v", err)
 		} else {
-			inspector := mitm.Inspector(mitm.PassthroughInspector{})
-			if sanitizerCfg.Enabled {
-				log.Printf("proxy: initializing SanitizingInspector (notificationsEnabled=%v)", notificationCfg.Enabled)
-				detectors := sanitizer.DetectorsByName(sanitizerCfg.Types)
-				s := sanitizer.New(detectors).WithConfidenceThreshold(sanitizerCfg.ConfidenceThreshold).WithMaxReplacements(sanitizerCfg.MaxReplacements)
-				inspector = sanitizer.NewSanitizingInspector(s).WithNotifications(notificationCfg.Enabled)
-			}
 			pr.mitm = mitm.NewHandler(mitm.NewCAStore(baseDir), transport, p, c, a, inspector)
 		}
 	}
@@ -118,6 +122,15 @@ func (p *Proxy) handleHTTP(w http.ResponseWriter, r *http.Request) {
 	if outReq.URL.Host == "" {
 		outReq.URL.Host = r.Host
 	}
+	inspector := p.inspector
+	if inspector == nil {
+		inspector = mitm.PassthroughInspector{}
+	}
+	outReq, err := inspector.InspectRequest(outReq)
+	if err != nil {
+		http.Error(w, "request inspection failed", http.StatusBadRequest)
+		return
+	}
 
 	resp, err := p.transport.RoundTrip(outReq)
 	if err != nil {
@@ -125,6 +138,11 @@ func (p *Proxy) handleHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer resp.Body.Close()
+	resp, err = inspector.InspectResponse(resp)
+	if err != nil {
+		http.Error(w, "response inspection failed", http.StatusBadGateway)
+		return
+	}
 
 	copyHeader(w.Header(), resp.Header)
 	w.WriteHeader(resp.StatusCode)

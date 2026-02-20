@@ -48,7 +48,11 @@ func NewHandler(ca *CAStore, transport *http.Transport, p policy.Engine, cls cla
 	if insp == nil {
 		insp = PassthroughInspector{}
 	}
-	return &Handler{ca: ca, transport: transport, policy: p, classifier: cls, audit: logger, inspector: insp, sessions: session.NewStore()}
+	h := &Handler{ca: ca, transport: transport, policy: p, classifier: cls, audit: logger, inspector: insp, sessions: session.NewStore()}
+	if si, ok := insp.(*sanitizer.SanitizingInspector); ok {
+		si.WithSessions(h.sessions)
+	}
+	return h
 }
 
 func (h *Handler) HandleMITM(clientConn net.Conn, host string) {

@@ -1,0 +1,30 @@
+version: "3.9"
+
+services:
+  proxy:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    ports:
+      - "8080:8080"
+
+  echo:
+    build:
+      context: .
+      dockerfile: cmd/echo-server/Dockerfile
+    ports:
+      - "9000:9000"
+
+  tester:
+    image: golang:1.22-alpine
+    working_dir: /app
+    volumes:
+      - .:/app
+    depends_on:
+      - proxy
+      - echo
+    environment:
+      - RUN_INTEGRATION=1
+      - INTEGRATION_PROXY_ADDR=proxy:8080
+      - INTEGRATION_ECHO_ADDR=echo:9000
+    command: ["go", "test", "./internal/integration", "-v", "-count=1"]
