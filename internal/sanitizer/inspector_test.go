@@ -120,3 +120,62 @@ func TestUniqueTypes(t *testing.T) {
 		t.Fatalf("uniqueTypes() = %#v", types)
 	}
 }
+
+func TestSanitizingInspectorInspectResponseRestoresOriginalValues(t *testing.T) {
+	s := New([]Detector{EmailDetector{}})
+	inspector := NewSanitizingInspector(s)
+
+	req, _ := http.NewRequest(http.MethodPost, "https://example.com/v1/chat/completions", strings.NewReader(`{"email":"john@example.com"}`))
+	req.Header.Set("Content-Type", "application/json")
+
+	sanitizedReq, err := inspector.InspectRequest(req)
+	if err != nil {
+		t.Fatalf("InspectRequest() error = %v", err)
+	}
+
+	resp := &http.Response{
+		StatusCode:    http.StatusOK,
+		Header:        make(http.Header),
+		Body:          io.NopCloser(strings.NewReader(`{"echo":"[EMAIL_1]"}`)),
+		ContentLength: int64(len(`{"echo":"[EMAIL_1]"}`)),
+		Request:       sanitizedReq,
+	}
+	resp.Header.Set("Content-Type", "application/json")
+
+	out, err := inspector.InspectResponse(resp)
+	if err != nil {
+		t.Fatalf("InspectResponse() error = %v", err)
+	}
+	body, _ := io.ReadAll(out.Body)
+	if got := string(body); got != `{"echo":"john@example.com"}` {
+		t.Fatalf("restored body = %q", got)
+	}
+}
+
+func TestSanitizingInspectorInspectResponseSkipsNonTextContent(t *testing.T) {
+	s := New([]Detector{EmailDetector{}})
+	inspector := NewSanitizingInspector(s)
+
+	req, _ := http.NewRequest(http.MethodPost, "https://example.com/upload", strings.NewReader(`{"email":"john@example.com"}`))
+	req.Header.Set("Content-Type", "application/json")
+	sanitizedReq, _ := inspector.InspectRequest(req)
+
+	original := "[EMAIL_1]"
+	resp := &http.Response{
+		StatusCode:    http.StatusOK,
+		Header:        make(http.Header),
+		Body:          io.NopCloser(strings.NewReader(original)),
+		ContentLength: int64(len(original)),
+		Request:       sanitizedReq,
+	}
+	resp.Header.Set("Content-Type", "application/octet-stream")
+
+	out, err := inspector.InspectResponse(resp)
+	if err != nil {
+		t.Fatalf("InspectResponse() error = %v", err)
+	}
+	body, _ := io.ReadAll(out.Body)
+	if got := string(body); got != original {
+		t.Fatalf("body mutated unexpectedly: %q", got)
+	}
+}
