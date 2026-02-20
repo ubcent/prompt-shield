@@ -134,6 +134,22 @@ func TestProxyShouldMITMDecision(t *testing.T) {
 	}
 }
 
+func TestNormalizeHost(t *testing.T) {
+	tests := []struct {
+		input string
+		want  string
+	}{
+		{input: "api.openai.com:443", want: "api.openai.com"},
+		{input: "api.openai.com", want: "api.openai.com"},
+		{input: "[::1]:8443", want: "::1"},
+	}
+	for _, tc := range tests {
+		if got := normalizeHost(tc.input); got != tc.want {
+			t.Fatalf("normalizeHost(%q) = %q, want %q", tc.input, got, tc.want)
+		}
+	}
+}
+
 func TestProxyConnectReturnsEstablishedInsteadOfRedirect(t *testing.T) {
 	_, proxySrv := newTestProxy(t, policy.NewRuleEngine(nil), &memoryAudit{}, config.MITM{}, config.Sanitizer{}, t.TempDir())
 	defer proxySrv.Close()

@@ -42,7 +42,7 @@ func NewHandler(ca *CAStore, transport *http.Transport, p policy.Engine, cls cla
 func (h *Handler) HandleMITM(clientConn net.Conn, host string) {
 	defer clientConn.Close()
 
-	cert, err := h.ca.GetLeafCert(hostOnly(host))
+	cert, err := h.ca.GetLeafCert(normalizeHost(host))
 	if err != nil {
 		log.Printf("mitm cert error for %s: %v", host, err)
 		return
@@ -61,7 +61,8 @@ func (h *Handler) HandleMITM(clientConn net.Conn, host string) {
 
 func (h *Handler) serverHandler(connectHost string) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		host := hostOnly(connectHost)
+		host := normalizeHost(connectHost)
+		log.Printf("MITM request: %s %s", r.Method, r.URL)
 		_ = h.classifier.Classify(host)
 		decision := h.policy.Evaluate(host)
 		if decision.Decision == policy.Block {
@@ -212,7 +213,7 @@ func (l *singleConnListener) Addr() net.Addr {
 	return &net.TCPAddr{IP: net.ParseIP("127.0.0.1"), Port: 0}
 }
 
-func hostOnly(hostport string) string {
+func normalizeHost(hostport string) string {
 	host, _, err := net.SplitHostPort(hostport)
 	if err == nil {
 		return host

@@ -75,9 +75,9 @@ func (p *Proxy) Shutdown(ctx context.Context) error {
 }
 
 func (p *Proxy) handle(w http.ResponseWriter, r *http.Request) {
-	host := hostOnly(r.Host)
+	host := normalizeHost(r.Host)
 	if host == "" && r.URL != nil {
-		host = hostOnly(r.URL.Host)
+		host = normalizeHost(r.URL.Host)
 	}
 
 	_ = p.classifier.Classify(host)
@@ -96,7 +96,7 @@ func (p *Proxy) handle(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if r.Method == http.MethodConnect {
-		p.handleConnect(w, r, decision)
+		p.handleConnect(w, r)
 		return
 	}
 	p.handleHTTP(w, r)
@@ -124,12 +124,16 @@ func (p *Proxy) handleHTTP(w http.ResponseWriter, r *http.Request) {
 	_, _ = io.Copy(w, resp.Body)
 }
 
-func (p *Proxy) handleConnect(w http.ResponseWriter, r *http.Request, decision policy.Result) {
+func (p *Proxy) handleConnect(w http.ResponseWriter, r *http.Request) {
 	target := connectTarget(r.Host)
 	if target == "" {
 		http.Error(w, "missing CONNECT target", http.StatusBadRequest)
 		return
 	}
+
+	host := normalizeHost(target)
+	decision := p.policy.Evaluate(host)
+	log.Printf("CONNECT %s decision=%s", target, decision.Decision)
 
 	if p.shouldMITM(target, decision) {
 		log.Printf("CONNECT request to %s (mode=mitm)", target)
@@ -208,7 +212,7 @@ func (p *Proxy) shouldMITM(host string, decision policy.Result) bool {
 	if len(p.mitmCfg.Domains) == 0 {
 		return true
 	}
-	needle := strings.ToLower(hostOnly(host))
+	needle := strings.ToLower(normalizeHost(host))
 	for _, domain := range p.mitmCfg.Domains {
 		if strings.EqualFold(strings.TrimSpace(domain), needle) {
 			return true
@@ -231,14 +235,24 @@ func copyHeader(dst, src http.Header) {
 	}
 }
 
-func hostOnly(hostport string) string {
+func normalizeHost(hostport string) string {
 	if hostport == "" {
 		return ""
+	}
+	if strings.HasPrefix(hostport, "[") {
+		h, _, err := net.SplitHostPort(hostport)
+		if err == nil {
+			return h
+		}
 	}
 	if strings.Contains(hostport, ":") {
 		h, _, err := net.SplitHostPort(hostport)
 		if err == nil {
 			return h
+		}
+		parts := strings.Split(hostport, ":")
+		if len(parts) > 0 {
+			return parts[0]
 		}
 	}
 	return hostport
