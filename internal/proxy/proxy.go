@@ -35,7 +35,7 @@ type Proxy struct {
 	mitmCfg    config.MITM
 }
 
-func New(addr string, p policy.Engine, c classifier.Classifier, a audit.Logger, mitmCfg config.MITM, sanitizerCfg config.Sanitizer) *Proxy {
+func New(addr string, p policy.Engine, c classifier.Classifier, a audit.Logger, mitmCfg config.MITM, sanitizerCfg config.Sanitizer, notificationCfg config.Notifications) *Proxy {
 	transport := &http.Transport{
 		Proxy: http.ProxyFromEnvironment,
 		TLSClientConfig: &tls.Config{
@@ -58,7 +58,7 @@ func New(addr string, p policy.Engine, c classifier.Classifier, a audit.Logger, 
 			if sanitizerCfg.Enabled {
 				detectors := sanitizer.DetectorsByName(sanitizerCfg.Types)
 				s := sanitizer.New(detectors).WithConfidenceThreshold(sanitizerCfg.ConfidenceThreshold).WithMaxReplacements(sanitizerCfg.MaxReplacements)
-				inspector = sanitizer.NewSanitizingInspector(s)
+				inspector = sanitizer.NewSanitizingInspector(s).WithNotifications(notificationCfg.Enabled)
 			}
 			pr.mitm = mitm.NewHandler(mitm.NewCAStore(baseDir), transport, p, c, a, inspector)
 		}

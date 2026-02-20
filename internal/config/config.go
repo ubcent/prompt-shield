@@ -28,11 +28,12 @@ type Rule struct {
 }
 
 type Config struct {
-	Port      int       `json:"port"`
-	LogFile   string    `json:"log_file"`
-	MITM      MITM      `json:"mitm"`
-	Sanitizer Sanitizer `json:"sanitizer"`
-	Rules     []Rule    `json:"rules"`
+	Port          int           `json:"port"`
+	LogFile       string        `json:"log_file"`
+	MITM          MITM          `json:"mitm"`
+	Sanitizer     Sanitizer     `json:"sanitizer"`
+	Notifications Notifications `json:"notifications"`
+	Rules         []Rule        `json:"rules"`
 }
 
 type MITM struct {
@@ -47,12 +48,17 @@ type Sanitizer struct {
 	MaxReplacements     int      `json:"max_replacements"`
 }
 
+type Notifications struct {
+	Enabled bool `json:"enabled"`
+}
+
 func Default() Config {
 	return Config{
-		Port:      defaultPort,
-		LogFile:   defaultLogFile,
-		MITM:      MITM{},
-		Sanitizer: Sanitizer{Types: []string{"email", "phone", "api_key", "jwt"}},
+		Port:          defaultPort,
+		LogFile:       defaultLogFile,
+		MITM:          MITM{},
+		Sanitizer:     Sanitizer{Types: []string{"email", "phone", "api_key", "jwt"}},
+		Notifications: Notifications{Enabled: true},
 		Rules: []Rule{{
 			ID:     "allow_all",
 			Action: "allow",
@@ -125,6 +131,7 @@ func parseYAMLLite(r *strings.Reader, cfg *Config) error {
 	inMITMDomains := false
 	inSanitizer := false
 	inSanitizerTypes := false
+	inNotifications := false
 	rulesFound := false
 
 	for s.Scan() {
@@ -145,18 +152,28 @@ func parseYAMLLite(r *strings.Reader, cfg *Config) error {
 			inSanitizerTypes = false
 			inMITMDomains = false
 			inMITM = false
+			inNotifications = false
 			continue
 		case line == "mitm:":
 			inSanitizer = false
 			inSanitizerTypes = false
 			inMITM = true
 			inMITMDomains = false
+			inNotifications = false
 			continue
 		case line == "sanitizer:":
 			inMITM = false
 			inMITMDomains = false
 			inSanitizer = true
 			inSanitizerTypes = false
+			inNotifications = false
+			continue
+		case line == "notifications:":
+			inMITM = false
+			inMITMDomains = false
+			inSanitizer = false
+			inSanitizerTypes = false
+			inNotifications = true
 			continue
 		case line == "domains:" && inMITM:
 			inMITMDomains = true
@@ -195,6 +212,8 @@ func parseYAMLLite(r *strings.Reader, cfg *Config) error {
 			cfg.MITM.Enabled = strings.EqualFold(strings.TrimSpace(strings.TrimPrefix(line, "enabled:")), "true")
 		case strings.HasPrefix(line, "enabled:") && inSanitizer:
 			cfg.Sanitizer.Enabled = strings.EqualFold(strings.TrimSpace(strings.TrimPrefix(line, "enabled:")), "true")
+		case strings.HasPrefix(line, "enabled:") && inNotifications:
+			cfg.Notifications.Enabled = strings.EqualFold(strings.TrimSpace(strings.TrimPrefix(line, "enabled:")), "true")
 		case strings.HasPrefix(line, "confidence_threshold:") && inSanitizer:
 			v := strings.TrimSpace(strings.TrimPrefix(line, "confidence_threshold:"))
 			threshold, err := strconv.ParseFloat(v, 64)

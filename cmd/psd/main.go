@@ -45,7 +45,7 @@ func run() error {
 	engine := policy.NewRuleEngine(cfg.Rules)
 	cls := classifier.HostClassifier{}
 	addr := fmt.Sprintf("127.0.0.1:%d", cfg.Port)
-	server := proxy.New(addr, engine, cls, auditLogger, cfg.MITM, cfg.Sanitizer)
+	server := proxy.New(addr, engine, cls, auditLogger, cfg.MITM, cfg.Sanitizer, cfg.Notifications)
 
 	errCh := make(chan error, 1)
 	go func() {
