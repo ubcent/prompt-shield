@@ -71,46 +71,57 @@ func isTextContent(contentType string) bool {
 }
 
 func (i *SanitizingInspector) InspectRequest(r *http.Request) (*http.Request, error) {
-	log.Printf("inspect request: %s %s", r.Method, r.URL)
+	log.Printf("sanitizer: inspect request: %s %s (ContentLength=%d)", r.Method, r.URL, r.ContentLength)
 	if r == nil || i == nil || i.sanitizer == nil {
+		log.Printf("sanitizer: skipping - missing prerequisites")
 		return r, nil
 	}
 	if r.Method == http.MethodGet || r.Body == nil {
+		log.Printf("sanitizer: skipping - GET or no body")
 		return r, nil
 	}
 	if strings.Contains(strings.ToLower(r.Header.Get("Content-Type")), "text/event-stream") {
+		log.Printf("sanitizer: skipping - event-stream")
 		return r, nil
 	}
 	if !isTextContent(r.Header.Get("Content-Type")) {
+		log.Printf("sanitizer: skipping - not text content (type=%s)", r.Header.Get("Content-Type"))
 		return r, nil
 	}
 	limit := i.maxBodySize
 	if limit <= 0 {
 		limit = defaultMaxBodyBytes
 	}
-	if r.ContentLength < 0 || r.ContentLength > limit {
+	if r.ContentLength > limit {
+		log.Printf("sanitizer: skipping - body too large (%d > %d)", r.ContentLength, limit)
 		return r, nil
 	}
 
 	body, err := readBodySafe(r, limit)
 	if err != nil {
-		log.Printf("sanitizer read error: %v", err)
+		log.Printf("sanitizer: read error: %v", err)
 		return r, nil
 	}
 	if len(body) == 0 {
+		log.Printf("sanitizer: empty body")
 		restoreBody(r, body)
 		return r, nil
 	}
 
+	log.Printf("sanitizer: scanning body (%d bytes)", len(body))
 	sanitized, items := i.sanitizer.Sanitize(string(body))
 	newBody := []byte(sanitized)
 	restoreBody(r, newBody)
 	if len(items) > 0 {
-		log.Printf("sanitized %d items", len(items))
+		log.Printf("sanitizer: found %d sensitive items: %v", len(items), uniqueTypes(items))
 		if i.notificationsEnabled {
-			notifier.Notify("PromptShield", fmt.Sprintf("Sensitive data detected: %s", strings.Join(uniqueTypes(items), ", ")))
+			msg := fmt.Sprintf("Sensitive data detected: %s", strings.Join(uniqueTypes(items), ", "))
+			log.Printf("sanitizer: sending notification: %s", msg)
+			notifier.Notify("PromptShield", msg)
 		}
 		r = withAuditMetadata(r, AuditMetadata{Sanitized: true, Items: items})
+	} else {
+		log.Printf("sanitizer: no sensitive data found")
 	}
 	return r, nil
 }

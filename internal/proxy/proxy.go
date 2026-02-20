@@ -56,6 +56,7 @@ func New(addr string, p policy.Engine, c classifier.Classifier, a audit.Logger, 
 		} else {
 			inspector := mitm.Inspector(mitm.PassthroughInspector{})
 			if sanitizerCfg.Enabled {
+				log.Printf("proxy: initializing SanitizingInspector (notificationsEnabled=%v)", notificationCfg.Enabled)
 				detectors := sanitizer.DetectorsByName(sanitizerCfg.Types)
 				s := sanitizer.New(detectors).WithConfidenceThreshold(sanitizerCfg.ConfidenceThreshold).WithMaxReplacements(sanitizerCfg.MaxReplacements)
 				inspector = sanitizer.NewSanitizingInspector(s).WithNotifications(notificationCfg.Enabled)

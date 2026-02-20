@@ -140,11 +140,14 @@ func (h *Handler) serverHandler(connectHost string) http.Handler {
 			req.Header.Set("Sec-Fetch-Dest", "empty")
 		}
 
+		log.Printf("MITM: before InspectRequest: %s %s", req.Method, req.URL)
 		req, err = h.inspector.InspectRequest(req)
 		if err != nil {
+			log.Printf("MITM: InspectRequest error: %v", err)
 			http.Error(w, "request inspection failed", http.StatusBadRequest)
 			return
 		}
+		log.Printf("MITM: after InspectRequest: %s %s", req.Method, req.URL)
 		if updatedPreview, ok := requestJSONPreview(req); ok {
 			reqPreview = updatedPreview
 		}
