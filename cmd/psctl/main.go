@@ -18,6 +18,7 @@ import (
 	"promptshield/internal/audit"
 	"promptshield/internal/config"
 	"promptshield/internal/proxy/mitm"
+	"promptshield/internal/systemproxy"
 )
 
 func main() {
@@ -42,6 +43,8 @@ func main() {
 		err = logs()
 	case "ca":
 		err = ca(flag.Args()[1:])
+	case "proxy":
+		err = proxy(flag.Args()[1:])
 	default:
 		usage()
 		os.Exit(1)
@@ -53,7 +56,7 @@ func main() {
 }
 
 func usage() {
-	fmt.Println("Usage: psctl [start|stop|restart|status|logs|ca init|ca print]")
+	fmt.Println("Usage: psctl [start|stop|restart|status|logs|ca init|ca print|proxy on|proxy off|proxy status]")
 }
 
 func loadConfig() (config.Config, error) {
@@ -282,6 +285,47 @@ func ca(args []string) error {
 		return nil
 	default:
 		return fmt.Errorf("usage: psctl ca [init|print]")
+	}
+}
+
+func proxy(args []string) error {
+	if len(args) == 0 {
+		return fmt.Errorf("usage: psctl proxy [on|off|status]")
+	}
+
+	switch args[0] {
+	case "on":
+		cfg, err := loadConfig()
+		if err != nil {
+			return err
+		}
+		if _, err := systemproxy.Enable("localhost", cfg.Port); err != nil {
+			return err
+		}
+		fmt.Printf("System proxy enabled (localhost:%d)\n", cfg.Port)
+		return nil
+	case "off":
+		if _, err := systemproxy.Disable(); err != nil {
+			return err
+		}
+		fmt.Println("System proxy disabled")
+		return nil
+	case "status":
+		st, err := systemproxy.CurrentStatus()
+		if err != nil {
+			return err
+		}
+		effective := st.Web
+		if st.Secure.Enabled {
+			effective = st.Secure
+		}
+		fmt.Printf("Proxy: %s\n", enabledLabel(effective.Enabled))
+		fmt.Printf("Host: %s\n", effective.Host)
+		fmt.Printf("Port: %d\n", effective.Port)
+		fmt.Printf("Service: %s\n", st.Service)
+		return nil
+	default:
+		return fmt.Errorf("usage: psctl proxy [on|off|status]")
 	}
 }
 
