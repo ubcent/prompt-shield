@@ -35,3 +35,22 @@ func TestParseYAMLLiteNotificationsConfig(t *testing.T) {
 		t.Fatalf("expected notifications to be disabled")
 	}
 }
+
+func TestParseYAMLLiteONNXNERConfig(t *testing.T) {
+	cfg := Default()
+	err := parseYAMLLite(strings.NewReader(`sanitizer:
+  detectors:
+    onnx_ner:
+      enabled: true
+      max_bytes: 4096
+      timeout_ms: 25
+      min_score: 0.8
+`), &cfg)
+	if err != nil {
+		t.Fatalf("parseYAMLLite() error = %v", err)
+	}
+	ner := cfg.Sanitizer.Detectors.ONNXNER
+	if !ner.Enabled || ner.MaxBytes != 4096 || ner.TimeoutMS != 25 || ner.MinScore != 0.8 {
+		t.Fatalf("unexpected onnx_ner config: %+v", ner)
+	}
+}

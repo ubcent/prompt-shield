@@ -15,6 +15,7 @@ import (
 	"promptshield/internal/audit"
 	"promptshield/internal/classifier"
 	"promptshield/internal/config"
+	"promptshield/internal/detect"
 	"promptshield/internal/policy"
 	"promptshield/internal/proxy/mitm"
 	"promptshield/internal/sanitizer"
@@ -63,7 +64,14 @@ func New(addr string, p policy.Engine, c classifier.Classifier, a audit.Logger, 
 		log.Printf("proxy: initializing SanitizingInspector (notificationsEnabled=%v)", notificationCfg.Enabled)
 		detectors := sanitizer.DetectorsByName(sanitizerCfg.Types)
 		s := sanitizer.New(detectors).WithConfidenceThreshold(sanitizerCfg.ConfidenceThreshold).WithMaxReplacements(sanitizerCfg.MaxReplacements)
-		inspector = sanitizer.NewSanitizingInspector(s).WithNotifications(notificationCfg.Enabled)
+		fast := []detect.Detector{detect.RegexDetector{}}
+		onnxCfg := sanitizerCfg.Detectors.ONNXNER
+		hybrid := detect.HybridDetector{
+			Fast:   fast,
+			Ner:    detect.NewONNXNERDetector(detect.ONNXNERConfig{MaxBytes: onnxCfg.MaxBytes}),
+			Config: detect.HybridConfig{NerEnabled: onnxCfg.Enabled, MaxBytes: onnxCfg.MaxBytes, Timeout: time.Duration(onnxCfg.TimeoutMS) * time.Millisecond, MinScore: onnxCfg.MinScore},
+		}
+		inspector = sanitizer.NewSanitizingInspector(s).WithHybridDetector(hybrid).WithNotifications(notificationCfg.Enabled)
 	}
 	pr.inspector = inspector
 
