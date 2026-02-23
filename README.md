@@ -55,7 +55,13 @@ git clone https://github.com/ubcent/prompt-shield.git
 cd prompt-shield
 ```
 
-### 2) Generate local CA certificate
+### 2) Build
+
+```bash
+make build
+```
+
+### 3) Generate local CA certificate
 
 MITM mode requires a local CA certificate.
 
@@ -63,7 +69,7 @@ MITM mode requires a local CA certificate.
 psctl ca init
 ```
 
-### 3) Install certificate in your system trust store (macOS)
+### 4) Install certificate in your system trust store (macOS)
 
 ```bash
 open ~/.promptshield/ca/cert.pem
@@ -75,19 +81,19 @@ Then in **Keychain Access**:
 2. Open certificate trust settings
 3. Set **When using this certificate** to **Always Trust**
 
-### 4) Start PromptShield
+### 5) Start PromptShield
 
 ```bash
 psctl start
 ```
 
-### 5) Enable system proxy
+### 6) Enable system proxy
 
 ```bash
 psctl proxy on
 ```
 
-### 6) Test with curl
+### 7) Test with curl
 
 ```bash
 curl -x http://localhost:8080 https://api.openai.com/v1/chat/completions \
