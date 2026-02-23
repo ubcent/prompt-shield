@@ -38,7 +38,13 @@ type Proxy struct {
 
 func New(addr string, p policy.Engine, c classifier.Classifier, a audit.Logger, mitmCfg config.MITM, sanitizerCfg config.Sanitizer, notificationCfg config.Notifications) *Proxy {
 	transport := &http.Transport{
-		Proxy: http.ProxyFromEnvironment,
+		Proxy:                 nil,
+		MaxIdleConns:          100,
+		MaxIdleConnsPerHost:   10,
+		IdleConnTimeout:       90 * time.Second,
+		TLSHandshakeTimeout:   5 * time.Second,
+		ExpectContinueTimeout: 1 * time.Second,
+		ForceAttemptHTTP2:     false,
 		TLSClientConfig: &tls.Config{
 			InsecureSkipVerify: false,
 		},
@@ -86,6 +92,11 @@ func (p *Proxy) Shutdown(ctx context.Context) error {
 }
 
 func (p *Proxy) handle(w http.ResponseWriter, r *http.Request) {
+	start := time.Now()
+	defer func() {
+		log.Printf("request %s took %v", r.URL, time.Since(start))
+	}()
+
 	// Health check endpoint
 	if r.URL.Path == "/health" {
 		w.WriteHeader(http.StatusOK)
@@ -133,19 +144,25 @@ func (p *Proxy) handleHTTP(w http.ResponseWriter, r *http.Request) {
 	if inspector == nil {
 		inspector = mitm.PassthroughInspector{}
 	}
+	t0 := time.Now()
 	outReq, err := inspector.InspectRequest(outReq)
+	log.Printf("sanitize took %v", time.Since(t0))
 	if err != nil {
 		http.Error(w, "request inspection failed", http.StatusBadRequest)
 		return
 	}
 
+	t1 := time.Now()
 	resp, err := p.transport.RoundTrip(outReq)
+	log.Printf("upstream request took %v", time.Since(t1))
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadGateway)
 		return
 	}
 	defer resp.Body.Close()
+	t2 := time.Now()
 	resp, err = inspector.InspectResponse(resp)
+	log.Printf("response processing took %v", time.Since(t2))
 	if err != nil {
 		http.Error(w, "response inspection failed", http.StatusBadGateway)
 		return

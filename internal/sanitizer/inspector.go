@@ -10,12 +10,13 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"time"
 
 	"promptshield/internal/notifier"
 	"promptshield/internal/session"
 )
 
-const defaultMaxBodyBytes int64 = 1 << 20
+const defaultMaxBodyBytes int64 = 256 * 1024
 
 var errBodyTooLarge = errors.New("body too large")
 
@@ -85,9 +86,15 @@ type sessionIDContextKeyType struct{}
 var sessionIDContextKey = sessionIDContextKeyType{}
 
 func (i *SanitizingInspector) InspectRequest(r *http.Request) (*http.Request, error) {
-	log.Printf("sanitizer: inspect request: %s %s (ContentLength=%d)", r.Method, r.URL, r.ContentLength)
+	start := time.Now()
+	defer func() {
+		log.Printf("sanitize stage took %v", time.Since(start))
+	}()
+
 	if r == nil || i == nil || i.sanitizer == nil {
-		log.Printf("sanitizer: skipping - missing prerequisites")
+		return r, nil
+	}
+	if !i.sanitizer.HasDetectors() {
 		return r, nil
 	}
 
@@ -99,18 +106,14 @@ func (i *SanitizingInspector) InspectRequest(r *http.Request) (*http.Request, er
 			r = r.WithContext(session.ContextWithID(r.Context(), sessionID))
 		}
 	}
-	log.Printf("sanitizer: using sessionID=%s", sessionID)
-
-	if r.Method == http.MethodGet || r.Body == nil {
-		log.Printf("sanitizer: skipping - GET or no body")
+	if r.Method != http.MethodPost || r.Body == nil {
 		return r, nil
 	}
 	if strings.Contains(strings.ToLower(r.Header.Get("Content-Type")), "text/event-stream") {
 		log.Printf("sanitizer: skipping - event-stream")
 		return r, nil
 	}
-	if !isTextContent(r.Header.Get("Content-Type")) {
-		log.Printf("sanitizer: skipping - not text content (type=%s)", r.Header.Get("Content-Type"))
+	if !strings.Contains(strings.ToLower(r.Header.Get("Content-Type")), "application/json") {
 		return r, nil
 	}
 	limit := i.maxBodySize
@@ -118,27 +121,25 @@ func (i *SanitizingInspector) InspectRequest(r *http.Request) (*http.Request, er
 		limit = defaultMaxBodyBytes
 	}
 	if r.ContentLength > limit || r.ContentLength < 0 {
-		log.Printf("sanitizer: skipping - unsupported body size (%d)", r.ContentLength)
 		return r, nil
 	}
 
 	body, err := readBodySafe(r, limit)
 	if err != nil {
-		log.Printf("sanitizer: read error: %v", err)
+		log.Printf("sanitizer read failed: %v", err)
 		return r, nil
 	}
 	if len(body) == 0 {
-		log.Printf("sanitizer: empty body")
 		restoreBody(r, body)
 		return r, nil
 	}
 
-	log.Printf("sanitizer: scanning body (%d bytes)", len(body))
+	log.Printf("sanitizer request body size: %d", len(body))
 	sanitized, items := i.sanitizer.Sanitize(string(body))
 	newBody := []byte(sanitized)
 	restoreBody(r, newBody)
 	if len(items) > 0 {
-		log.Printf("sanitizer: found %d sensitive items: %v", len(items), uniqueTypes(items))
+		log.Printf("sanitizer sensitive item count: %d", len(items))
 		mapping := make(map[string]string, len(items))
 		for _, item := range items {
 			mapping[item.Placeholder] = item.Original
@@ -149,12 +150,9 @@ func (i *SanitizingInspector) InspectRequest(r *http.Request) (*http.Request, er
 				"Detected: %s\nMasked before sending and restored locally",
 				strings.Join(uniqueTypes(items), ", "),
 			)
-			log.Printf("sanitizer: sending notification: %s", msg)
 			notifier.Notify("PromptShield", msg)
 		}
 		r = withAuditMetadata(r, AuditMetadata{Sanitized: true, Items: items})
-	} else {
-		log.Printf("sanitizer: no sensitive data found")
 	}
 	return r, nil
 }

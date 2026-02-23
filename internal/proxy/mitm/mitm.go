@@ -82,26 +82,26 @@ func (h *Handler) HandleMITM(clientConn net.Conn, host string) {
 
 func (h *Handler) serverHandler(connectHost string) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		start := time.Now()
+		defer func() {
+			log.Printf("request %s took %v", r.URL, time.Since(start))
+		}()
 		defer func() {
 			if rec := recover(); rec != nil {
 				log.Printf("MITM handler panic: %v", rec)
 			}
 		}()
 		host := normalizeHost(connectHost)
-		log.Printf("MITM: handling request %s %s (connectHost=%s)", r.Method, r.URL.Path, connectHost)
 
 		// Generate sessionID early to track this request/response pair
 		sessionID := session.GenerateID()
-		log.Printf("MITM: sessionID=%s", sessionID)
 
 		// Add sessionID to request context
 		r = r.WithContext(session.ContextWithID(r.Context(), sessionID))
 
 		_ = h.classifier.Classify(host)
 		decision := h.policy.Evaluate(host)
-		log.Printf("MITM: policy decision for %s: %s (reason: %s)", host, decision.Decision, decision.Reason)
 		if decision.Decision == policy.Block {
-			log.Printf("MITM: blocking request to %s", host)
 			http.Error(w, "blocked by PromptShield policy", http.StatusForbidden)
 			h.logAudit(r, host, decision, "", "")
 			return
@@ -155,34 +155,33 @@ func (h *Handler) serverHandler(connectHost string) http.Handler {
 			req.Header.Set("Sec-Fetch-Dest", "empty")
 		}
 
-		log.Printf("MITM: before InspectRequest: %s %s", req.Method, req.URL)
+		t0 := time.Now()
 		if !skipInspect {
 			req, err = h.inspector.InspectRequest(req)
+			log.Printf("sanitize took %v", time.Since(t0))
 			if err != nil {
 				log.Printf("MITM: InspectRequest error: %v", err)
 				http.Error(w, "request inspection failed", http.StatusBadRequest)
 				return
 			}
-			log.Printf("MITM: after InspectRequest: %s %s", req.Method, req.URL)
 			if updatedPreview, ok := requestJSONPreview(req); ok {
 				reqPreview = updatedPreview
 			}
 		} else {
-			log.Printf("MITM: skipping request inspection due to size (content-length=%d)", r.ContentLength)
+			log.Printf("sanitize skipped body size: %d", r.ContentLength)
 		}
-		log.Printf("MITM: sending request to upstream: %s %s (Host: %s, User-Agent: %s)", req.Method, req.URL.String(), req.Host, req.Header.Get("User-Agent"))
 
+		t1 := time.Now()
 		resp, err := h.transport.RoundTrip(req)
+		log.Printf("upstream request took %v", time.Since(t1))
 		if err != nil {
 			log.Printf("MITM: RoundTrip error for %s: %v", host, err)
 			http.Error(w, err.Error(), http.StatusBadGateway)
 			return
 		}
 		defer resp.Body.Close()
-		log.Printf("MITM: received response for %s: status=%d", host, resp.StatusCode)
-
 		if isStreamingResponse(resp) {
-			log.Printf("MITM: streaming detected, skipping restore (sessionID=%s)", sessionID)
+			log.Printf("response processing skipped for streaming response")
 			copyHeader(w.Header(), resp.Header)
 			w.WriteHeader(resp.StatusCode)
 			_, _ = io.Copy(w, resp.Body)
@@ -191,7 +190,7 @@ func (h *Handler) serverHandler(connectHost string) http.Handler {
 		}
 
 		if resp.ContentLength > maxBodySize || resp.ContentLength < 0 {
-			log.Printf("MITM: skipping response inspection due to size (content-length=%d)", resp.ContentLength)
+			log.Printf("response processing skipped body size: %d", resp.ContentLength)
 			copyHeader(w.Header(), resp.Header)
 			w.WriteHeader(resp.StatusCode)
 			_, _ = io.Copy(w, resp.Body)
@@ -199,6 +198,7 @@ func (h *Handler) serverHandler(connectHost string) http.Handler {
 			return
 		}
 
+		t2 := time.Now()
 		resp, respPreview, err := cloneLimitedResponse(resp, maxBodySize)
 		if err != nil {
 			http.Error(w, "upstream body too large", http.StatusBadGateway)
@@ -212,6 +212,7 @@ func (h *Handler) serverHandler(connectHost string) http.Handler {
 
 		// Restore response if we have a mapping for this session
 		resp = h.restoreResponse(resp, sessionID)
+		log.Printf("response processing took %v", time.Since(t2))
 		defer h.sessions.Delete(sessionID)
 
 		copyHeader(w.Header(), resp.Header)
@@ -234,54 +235,43 @@ func (h *Handler) restoreResponse(resp *http.Response, sessionID string) *http.R
 	// Skip streaming/event-stream content
 	contentType := strings.ToLower(resp.Header.Get("Content-Type"))
 	if strings.Contains(contentType, "text/event-stream") {
-		log.Printf("MITM: streaming detected, skipping restore (sessionID=%s)", sessionID)
 		return resp
 	}
 
 	// Skip non-text content types
 	if !isTextContentType(contentType) {
-		log.Printf("MITM: skipping restore for non-text content (sessionID=%s, type=%s)", sessionID, resp.Header.Get("Content-Type"))
 		return resp
 	}
 
 	// Check content length
 	limit := int64(maxBodySize)
 	if resp.ContentLength > limit || resp.ContentLength < 0 {
-		log.Printf("MITM: skipping restore due to content length (sessionID=%s, len=%d)", sessionID, resp.ContentLength)
 		return resp
 	}
 
 	// Get the session mapping
 	sess, ok := h.sessions.Get(sessionID)
 	if !ok || len(sess.Mapping) == 0 {
-		log.Printf("MITM: no session mapping found (sessionID=%s)", sessionID)
 		return resp
 	}
-
-	log.Printf("MITM: restoring response (sessionID=%s, placeholders=%d)", sessionID, len(sess.Mapping))
 
 	// Read response body
 	body, err := io.ReadAll(io.LimitReader(resp.Body, limit+1))
 	if err != nil {
-		log.Printf("MITM: failed to read response body for restore (sessionID=%s): %v", sessionID, err)
 		resp.Body = io.NopCloser(bytes.NewReader(body))
 		return resp
 	}
 
 	if int64(len(body)) > limit {
-		log.Printf("MITM: response body exceeds limit for restore (sessionID=%s)", sessionID)
 		resp.Body = io.NopCloser(bytes.NewReader(body))
 		return resp
 	}
 
 	// Apply restoration
 	restored := string(body)
-	originalCount := 0
 	for placeholder, original := range sess.Mapping {
 		if strings.Contains(restored, placeholder) {
 			restored = strings.ReplaceAll(restored, placeholder, original)
-			originalCount++
-			log.Printf("MITM: restored %s (sessionID=%s)", placeholder, sessionID)
 		}
 	}
 
@@ -292,7 +282,6 @@ func (h *Handler) restoreResponse(resp *http.Response, sessionID string) *http.R
 	resp.Header.Set("Content-Length", strconv.Itoa(len(newBody)))
 	resp.Header.Del("Transfer-Encoding")
 
-	log.Printf("MITM: restore complete (sessionID=%s, placeholders_found=%d)", sessionID, originalCount)
 	return resp
 }
 

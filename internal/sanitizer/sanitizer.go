@@ -31,6 +31,10 @@ type Sanitizer struct {
 	maxReplacements     int
 }
 
+func (s *Sanitizer) HasDetectors() bool {
+	return s != nil && len(s.detectors) > 0
+}
+
 func New(detectors []Detector) *Sanitizer {
 	return &Sanitizer{detectors: detectors, confidenceThreshold: 0.0}
 }
