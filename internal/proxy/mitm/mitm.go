@@ -18,6 +18,7 @@ import (
 	"promptshield/internal/policy"
 	"promptshield/internal/sanitizer"
 	"promptshield/internal/session"
+	"promptshield/internal/trace"
 )
 
 const (
@@ -92,6 +93,9 @@ func (h *Handler) serverHandler(connectHost string) http.Handler {
 			}
 		}()
 		host := normalizeHost(connectHost)
+		requestTrace := trace.NewRequestTrace()
+		ctx := trace.WithContext(r.Context(), requestTrace)
+		r = r.WithContext(ctx)
 
 		// Generate sessionID early to track this request/response pair
 		sessionID := session.GenerateID()
@@ -155,10 +159,10 @@ func (h *Handler) serverHandler(connectHost string) http.Handler {
 			req.Header.Set("Sec-Fetch-Dest", "empty")
 		}
 
-		t0 := time.Now()
+		requestTrace.SanitizeStart = time.Now()
 		if !skipInspect {
 			req, err = h.inspector.InspectRequest(req)
-			log.Printf("sanitize took %v", time.Since(t0))
+			requestTrace.SanitizeEnd = time.Now()
 			if err != nil {
 				log.Printf("MITM: InspectRequest error: %v", err)
 				http.Error(w, "request inspection failed", http.StatusBadRequest)
@@ -168,23 +172,30 @@ func (h *Handler) serverHandler(connectHost string) http.Handler {
 				reqPreview = updatedPreview
 			}
 		} else {
+			requestTrace.SanitizeEnd = time.Now()
 			log.Printf("sanitize skipped body size: %d", r.ContentLength)
 		}
 
-		t1 := time.Now()
+		requestTrace.UpstreamStart = time.Now()
 		resp, err := h.transport.RoundTrip(req)
-		log.Printf("upstream request took %v", time.Since(t1))
 		if err != nil {
 			log.Printf("MITM: RoundTrip error for %s: %v", host, err)
 			http.Error(w, err.Error(), http.StatusBadGateway)
 			return
 		}
-		defer resp.Body.Close()
+		requestTrace.FirstByte = time.Now()
+		requestTrace.IsStreaming = isStreamingResponse(resp)
+		resp.Body = requestTrace.TrackingReadCloser(resp.Body, func() {
+			requestTrace.UpstreamEnd = time.Now()
+		})
+
 		if isStreamingResponse(resp) {
 			log.Printf("response processing skipped for streaming response")
 			copyHeader(w.Header(), resp.Header)
 			w.WriteHeader(resp.StatusCode)
 			_, _ = io.Copy(w, resp.Body)
+			_ = resp.Body.Close()
+			requestTrace.LogAt(time.Now())
 			h.logAudit(req, host, decision, reqPreview, "")
 			return
 		}
@@ -194,11 +205,13 @@ func (h *Handler) serverHandler(connectHost string) http.Handler {
 			copyHeader(w.Header(), resp.Header)
 			w.WriteHeader(resp.StatusCode)
 			_, _ = io.Copy(w, resp.Body)
+			_ = resp.Body.Close()
+			requestTrace.LogAt(time.Now())
 			h.logAudit(req, host, decision, reqPreview, "")
 			return
 		}
 
-		t2 := time.Now()
+		requestTrace.ResponseStart = time.Now()
 		resp, respPreview, err := cloneLimitedResponse(resp, maxBodySize)
 		if err != nil {
 			http.Error(w, "upstream body too large", http.StatusBadGateway)
@@ -206,18 +219,21 @@ func (h *Handler) serverHandler(connectHost string) http.Handler {
 		}
 		resp, err = h.inspector.InspectResponse(resp)
 		if err != nil {
+			requestTrace.ResponseEnd = time.Now()
 			http.Error(w, "response inspection failed", http.StatusBadGateway)
 			return
 		}
 
 		// Restore response if we have a mapping for this session
 		resp = h.restoreResponse(resp, sessionID)
-		log.Printf("response processing took %v", time.Since(t2))
+		requestTrace.ResponseEnd = time.Now()
 		defer h.sessions.Delete(sessionID)
 
 		copyHeader(w.Header(), resp.Header)
 		w.WriteHeader(resp.StatusCode)
 		_, _ = io.Copy(w, resp.Body)
+		_ = resp.Body.Close()
+		requestTrace.LogAt(time.Now())
 		h.logAudit(req, host, decision, reqPreview, respPreview)
 	})
 }

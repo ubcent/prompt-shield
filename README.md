@@ -159,6 +159,38 @@ go test -race ./...
 
 **Примечание:** Integration тесты требуют переменные окружения `PROXY_ADDR` и `ECHO_ADDR`.
 
+## Performance testing
+
+Для замера latency по этапам запроса (sanitize, ttfb, upstream, response) можно использовать встроенный скрипт:
+
+```bash
+./scripts/benchmark_trace.sh
+```
+
+Скрипт отправляет 2 запроса через локальный proxy `http://localhost:8080`:
+1. `GET /v1/models`
+2. `POST /v1/chat/completions`
+
+Перед запуском:
+1. Подними PromptShield (`./psctl start`)
+2. Убедись, что доступен внешний API endpoint (например `api.openai.com`)
+
+Пример ручного запуска команд из скрипта:
+
+```bash
+curl -x http://localhost:8080 https://api.openai.com/v1/models -k
+
+curl -x http://localhost:8080 https://api.openai.com/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -d '{"message":"test"}' -k
+```
+
+Логи трассировки пишутся в stdout процесса proxy (сэмплирование по умолчанию 10% запросов). Ищи строки вида:
+
+```text
+trace=<id> total=<d> sanitize=<d> ttfb=<d> upstream=<d> response=<d> first_byte_latency=<d> streaming=<bool>
+```
+
 ## Security
 
 - MITM inspection is optional and domain-scoped.
