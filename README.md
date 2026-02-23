@@ -1,7 +1,7 @@
+⚠️ Experimental: use at your own risk. Behavior and APIs may change without notice.
+
 # PromptShield
 Local Privacy Firewall for AI
-
-> Experimental: use at your own risk. Behavior and APIs may change without notice.
 
 PromptShield is a local HTTP/HTTPS proxy with MITM support for AI traffic. It helps prevent sensitive data from leaving your machine by detecting and masking PII or secrets before requests reach AI providers. It also restores original values in responses so your tools keep working as expected.
 
