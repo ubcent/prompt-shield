@@ -19,13 +19,13 @@ import (
 	"syscall"
 	"time"
 
-	"promptshield/internal/audit"
-	"promptshield/internal/classifier"
-	"promptshield/internal/config"
-	"promptshield/internal/policy"
-	"promptshield/internal/proxy"
-	"promptshield/internal/proxy/mitm"
-	"promptshield/internal/systemproxy"
+	"velar/internal/audit"
+	"velar/internal/classifier"
+	"velar/internal/config"
+	"velar/internal/policy"
+	"velar/internal/proxy"
+	"velar/internal/proxy/mitm"
+	"velar/internal/systemproxy"
 )
 
 func main() {
@@ -393,13 +393,13 @@ func proxyCommand(args []string) error {
 }
 
 func daemonCommand() (*exec.Cmd, error) {
-	if path, err := exec.LookPath("velar"); err == nil {
-		return exec.Command(path, "daemon"), nil
+	if path, err := exec.LookPath("velard"); err == nil {
+		return exec.Command(path), nil
 	}
-	if exe, err := os.Executable(); err == nil {
-		return exec.Command(exe, "daemon"), nil
+	if _, err := os.Stat(filepath.Join(".", "velard")); err == nil {
+		return exec.Command("./velard"), nil
 	}
-	return exec.Command("go", "run", "./cmd/velar", "daemon"), nil
+	return exec.Command("go", "run", "./cmd/velard"), nil
 }
 
 func isDaemonRunning() bool {

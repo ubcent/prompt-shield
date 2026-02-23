@@ -12,10 +12,10 @@ import (
 	"strings"
 	"time"
 
-	"promptshield/internal/detect"
-	"promptshield/internal/notifier"
-	"promptshield/internal/session"
-	"promptshield/internal/trace"
+	"velar/internal/detect"
+	"velar/internal/notifier"
+	"velar/internal/session"
+	"velar/internal/trace"
 )
 
 const defaultMaxBodyBytes int64 = 256 * 1024

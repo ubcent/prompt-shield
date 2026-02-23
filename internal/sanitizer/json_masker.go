@@ -7,7 +7,7 @@ import (
 	"strconv"
 	"strings"
 
-	"promptshield/internal/detect"
+	"velar/internal/detect"
 )
 
 var interestingKeys = map[string]struct{}{

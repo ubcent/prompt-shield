@@ -13,12 +13,12 @@ import (
 	"sync"
 	"time"
 
-	"promptshield/internal/audit"
-	"promptshield/internal/classifier"
-	"promptshield/internal/policy"
-	"promptshield/internal/sanitizer"
-	"promptshield/internal/session"
-	"promptshield/internal/trace"
+	"velar/internal/audit"
+	"velar/internal/classifier"
+	"velar/internal/policy"
+	"velar/internal/sanitizer"
+	"velar/internal/session"
+	"velar/internal/trace"
 )
 
 const (

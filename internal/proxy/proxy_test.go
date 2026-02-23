@@ -19,12 +19,12 @@ import (
 	"testing"
 	"time"
 
-	"promptshield/internal/audit"
-	"promptshield/internal/classifier"
-	"promptshield/internal/config"
-	"promptshield/internal/policy"
-	"promptshield/internal/proxy/mitm"
-	"promptshield/internal/sanitizer"
+	"velar/internal/audit"
+	"velar/internal/classifier"
+	"velar/internal/config"
+	"velar/internal/policy"
+	"velar/internal/proxy/mitm"
+	"velar/internal/sanitizer"
 )
 
 type memoryAudit struct {

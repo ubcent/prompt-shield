@@ -14,8 +14,8 @@ import (
 	"path/filepath"
 	"sync"
 
-	"promptshield/internal/config"
 	"time"
+	"velar/internal/config"
 )
 
 const (

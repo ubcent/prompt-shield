@@ -45,10 +45,20 @@ jobs:
           -o dist/velar-linux-amd64 \
           ./cmd/velar
 
+        CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build \
+          -ldflags="-X main.Version=${{ steps.version.outputs.version }}" \
+          -o dist/velard-linux-amd64 \
+          ./cmd/velard
+
         CGO_ENABLED=0 GOOS=darwin GOARCH=amd64 go build \
           -ldflags="-X main.Version=${{ steps.version.outputs.version }}" \
           -o dist/velar-darwin-amd64 \
           ./cmd/velar
+
+        CGO_ENABLED=0 GOOS=darwin GOARCH=amd64 go build \
+          -ldflags="-X main.Version=${{ steps.version.outputs.version }}" \
+          -o dist/velard-darwin-amd64 \
+          ./cmd/velard
 
     - name: Create Release from tag
       if: startsWith(github.ref, 'refs/tags/v')

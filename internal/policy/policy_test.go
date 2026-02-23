@@ -3,7 +3,7 @@ package policy
 import (
 	"testing"
 
-	"promptshield/internal/config"
+	"velar/internal/config"
 )
 
 func TestRuleEngineEvaluate(t *testing.T) {

@@ -11,9 +11,9 @@ import (
 	"testing"
 	"time"
 
-	"promptshield/internal/classifier"
-	"promptshield/internal/config"
-	"promptshield/internal/policy"
+	"velar/internal/classifier"
+	"velar/internal/config"
+	"velar/internal/policy"
 )
 
 func BenchmarkProxy(b *testing.B) {

@@ -12,14 +12,14 @@ import (
 	"strings"
 	"time"
 
-	"promptshield/internal/audit"
-	"promptshield/internal/classifier"
-	"promptshield/internal/config"
-	"promptshield/internal/detect"
-	"promptshield/internal/policy"
-	"promptshield/internal/proxy/mitm"
-	"promptshield/internal/sanitizer"
-	"promptshield/internal/trace"
+	"velar/internal/audit"
+	"velar/internal/classifier"
+	"velar/internal/config"
+	"velar/internal/detect"
+	"velar/internal/policy"
+	"velar/internal/proxy/mitm"
+	"velar/internal/sanitizer"
+	"velar/internal/trace"
 )
 
 type Server interface {

@@ -11,16 +11,16 @@ import (
 	"syscall"
 	"time"
 
-	"promptshield/internal/audit"
-	"promptshield/internal/classifier"
-	"promptshield/internal/config"
-	"promptshield/internal/policy"
-	"promptshield/internal/proxy"
+	"velar/internal/audit"
+	"velar/internal/classifier"
+	"velar/internal/config"
+	"velar/internal/policy"
+	"velar/internal/proxy"
 )
 
 func main() {
 	if err := run(); err != nil {
-		log.Fatalf("velar failed: %v", err)
+		log.Fatalf("velard failed: %v", err)
 	}
 }
 

@@ -5,7 +5,7 @@ help:
 	@echo "Velar Makefile"
 	@echo ""
 	@echo "Build targets:"
-	@echo "  make build    - Build velar binary"
+	@echo "  make build    - Build velar and velard binaries"
 	@echo "  make run      - Run velar start"
 	@echo ""
 	@echo "Test targets:"
@@ -17,6 +17,7 @@ help:
 build:
 	@mkdir -p bin
 	go build -o bin/velar ./cmd/velar
+	go build -o bin/velard ./cmd/velard
 
 run:
 	go run ./cmd/velar start

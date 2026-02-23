@@ -8,7 +8,7 @@ import (
 	"strconv"
 	"strings"
 
-	"promptshield/internal/config"
+	"velar/internal/config"
 )
 
 type ProxyConfig struct {
