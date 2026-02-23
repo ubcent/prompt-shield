@@ -13,7 +13,9 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
+
 	"time"
+	"velar/internal/config"
 )
 
 const (
@@ -39,11 +41,11 @@ func NewCAStore(baseDir string) *CAStore {
 }
 
 func DefaultCAPath() (string, error) {
-	home, err := os.UserHomeDir()
+	appDir, err := config.AppDir()
 	if err != nil {
 		return "", err
 	}
-	return filepath.Join(home, ".promptshield", "ca"), nil
+	return filepath.Join(appDir, "ca"), nil
 }
 
 func (c *CAStore) EnsureRootCA() error {
@@ -135,7 +137,7 @@ func generateRootCA() ([]byte, []byte, *x509.Certificate, *rsa.PrivateKey, error
 	notBefore := time.Now().Add(-time.Hour)
 	tpl := &x509.Certificate{
 		SerialNumber:          randomSerial(),
-		Subject:               pkix.Name{CommonName: "PromptShield Root CA", Organization: []string{"PromptShield"}},
+		Subject:               pkix.Name{CommonName: "Velar Root CA", Organization: []string{"Velar"}},
 		NotBefore:             notBefore,
 		NotAfter:              notBefore.AddDate(10, 0, 0),
 		IsCA:                  true,
@@ -164,7 +166,7 @@ func (c *CAStore) generateLeafCertLocked(host string) (*tls.Certificate, error) 
 	notBefore := time.Now().Add(-time.Hour)
 	tpl := &x509.Certificate{
 		SerialNumber: randomSerial(),
-		Subject:      pkix.Name{CommonName: host, Organization: []string{"PromptShield MITM"}},
+		Subject:      pkix.Name{CommonName: host, Organization: []string{"Velar MITM"}},
 		NotBefore:    notBefore,
 		NotAfter:     notBefore.Add(maxLeafLifetime),
 		KeyUsage:     x509.KeyUsageDigitalSignature,

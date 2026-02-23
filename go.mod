@@ -1,3 +1,3 @@
-module promptshield
+module velar
 
 go 1.22

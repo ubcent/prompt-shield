@@ -4,7 +4,7 @@ import (
 	"context"
 	"testing"
 
-	"promptshield/internal/detect"
+	"velar/internal/detect"
 )
 
 type fakeNER struct{}

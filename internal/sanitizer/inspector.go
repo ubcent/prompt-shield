@@ -12,10 +12,10 @@ import (
 	"strings"
 	"time"
 
-	"promptshield/internal/detect"
-	"promptshield/internal/notifier"
-	"promptshield/internal/session"
-	"promptshield/internal/trace"
+	"velar/internal/detect"
+	"velar/internal/notifier"
+	"velar/internal/session"
+	"velar/internal/trace"
 )
 
 const defaultMaxBodyBytes int64 = 256 * 1024
@@ -177,7 +177,7 @@ func (i *SanitizingInspector) InspectRequest(r *http.Request) (*http.Request, er
 				"Detected: %s\nMasked before sending and restored locally",
 				strings.Join(uniqueTypes(items), ", "),
 			)
-			notifier.Notify("PromptShield", msg)
+			notifier.Notify("Velar", msg)
 		}
 		r = withAuditMetadata(r, AuditMetadata{Sanitized: true, Items: items})
 	}

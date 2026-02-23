@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"strings"
 
-	"promptshield/internal/config"
+	"velar/internal/config"
 )
 
 type Decision string

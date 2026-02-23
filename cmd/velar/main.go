@@ -2,13 +2,16 @@ package main
 
 import (
 	"bufio"
+	"context"
 	"errors"
 	"flag"
 	"fmt"
 	"io"
 	"log"
+	"net/http"
 	"os"
 	"os/exec"
+	"os/signal"
 	"path/filepath"
 	"runtime"
 	"strconv"
@@ -16,10 +19,13 @@ import (
 	"syscall"
 	"time"
 
-	"promptshield/internal/audit"
-	"promptshield/internal/config"
-	"promptshield/internal/proxy/mitm"
-	"promptshield/internal/systemproxy"
+	"velar/internal/audit"
+	"velar/internal/classifier"
+	"velar/internal/config"
+	"velar/internal/policy"
+	"velar/internal/proxy"
+	"velar/internal/proxy/mitm"
+	"velar/internal/systemproxy"
 )
 
 func main() {
@@ -45,19 +51,21 @@ func main() {
 	case "ca":
 		err = ca(flag.Args()[1:])
 	case "proxy":
-		err = proxy(flag.Args()[1:])
+		err = proxyCommand(flag.Args()[1:])
+	case "daemon":
+		err = runDaemon()
 	default:
 		usage()
 		os.Exit(1)
 	}
 
 	if err != nil {
-		log.Fatalf("psctl %s failed: %v", cmd, err)
+		log.Fatalf("velar %s failed: %v", cmd, err)
 	}
 }
 
 func usage() {
-	fmt.Println("Usage: psctl [start|stop|restart|status|logs|ca init|ca print|proxy on|proxy off|proxy status]")
+	fmt.Println("Usage: velar [start|stop|restart|status|logs|ca init|ca print|proxy on|proxy off|proxy status]")
 }
 
 func loadConfig() (config.Config, error) {
@@ -71,6 +79,43 @@ func loadConfig() (config.Config, error) {
 	return config.Load(cfgPath)
 }
 
+func runDaemon() error {
+	cfg, err := loadConfig()
+	if err != nil {
+		return err
+	}
+	auditLogger, err := audit.NewJSONLLogger(cfg.LogFile)
+	if err != nil {
+		return err
+	}
+
+	engine := policy.NewRuleEngine(cfg.Rules)
+	cls := classifier.HostClassifier{}
+	addr := fmt.Sprintf("0.0.0.0:%d", cfg.Port)
+	server := proxy.New(addr, engine, cls, auditLogger, cfg.MITM, cfg.Sanitizer, cfg.Notifications)
+
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- server.Start()
+	}()
+
+	sigCh := make(chan os.Signal, 1)
+	signal.Notify(sigCh, os.Interrupt, syscall.SIGTERM)
+
+	select {
+	case sig := <-sigCh:
+		log.Printf("received signal %s, shutting down", sig)
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		return server.Shutdown(ctx)
+	case err := <-errCh:
+		if errors.Is(err, http.ErrServerClosed) {
+			return nil
+		}
+		return err
+	}
+}
+
 func startDaemon() error {
 	cfg, err := loadConfig()
 	if err != nil {
@@ -82,7 +127,7 @@ func startDaemon() error {
 
 	running, pid := processStatus()
 	if running {
-		fmt.Printf("PromptShield already running (pid=%d)\n", pid)
+		fmt.Printf("Velar already running (pid=%d)\n", pid)
 		return nil
 	}
 
@@ -121,7 +166,7 @@ func startDaemon() error {
 		return err
 	}
 
-	fmt.Printf("PromptShield started (pid=%d)\n", cmd.Process.Pid)
+	fmt.Printf("Velar started (pid=%d)\n", cmd.Process.Pid)
 	fmt.Printf("Proxy: http://localhost:%d\n", cfg.Port)
 	fmt.Printf("MITM: %s\n", enabledLabel(cfg.MITM.Enabled))
 	fmt.Printf("Sanitizer: %s\n", enabledLabel(cfg.Sanitizer.Enabled))
@@ -141,7 +186,7 @@ func stopDaemon() error {
 	pid, err := readPID()
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
-			fmt.Println("PromptShield not running")
+			fmt.Println("Velar not running")
 			return nil
 		}
 		return err
@@ -149,7 +194,7 @@ func stopDaemon() error {
 
 	if !isProcessRunning(pid) {
 		_ = os.Remove(pidFilePath())
-		fmt.Println("PromptShield not running")
+		fmt.Println("Velar not running")
 		return nil
 	}
 
@@ -178,7 +223,7 @@ func stopDaemon() error {
 	if err := os.Remove(pidFilePath()); err != nil && !errors.Is(err, os.ErrNotExist) {
 		return err
 	}
-	fmt.Printf("PromptShield stopped (pid=%d)\n", pid)
+	fmt.Printf("Velar stopped (pid=%d)\n", pid)
 	return nil
 }
 
@@ -275,7 +320,7 @@ func logs() error {
 
 func ca(args []string) error {
 	if len(args) == 0 {
-		return fmt.Errorf("usage: psctl ca [init|print]")
+		return fmt.Errorf("usage: velar ca [init|print]")
 	}
 	path, err := mitm.DefaultCAPath()
 	if err != nil {
@@ -294,17 +339,17 @@ func ca(args []string) error {
 	case "print":
 		certPath := filepath.Join(path, "cert.pem")
 		fmt.Printf("Root CA certificate: %s\n", certPath)
-		fmt.Println("macOS install: open ~/.promptshield/ca/cert.pem")
+		fmt.Println("macOS install: open ~/.velar/ca/cert.pem")
 		fmt.Println("Then add it to Keychain and set Trust to 'Always Trust'.")
 		return nil
 	default:
-		return fmt.Errorf("usage: psctl ca [init|print]")
+		return fmt.Errorf("usage: velar ca [init|print]")
 	}
 }
 
-func proxy(args []string) error {
+func proxyCommand(args []string) error {
 	if len(args) == 0 {
-		return fmt.Errorf("usage: psctl proxy [on|off|status]")
+		return fmt.Errorf("usage: velar proxy [on|off|status]")
 	}
 
 	switch args[0] {
@@ -314,7 +359,7 @@ func proxy(args []string) error {
 			return err
 		}
 		if !isDaemonRunning() {
-			fmt.Println("Cannot enable proxy: PromptShield is not running")
+			fmt.Println("Cannot enable proxy: Velar is not running")
 			os.Exit(1)
 		}
 		if _, err := systemproxy.Enable("localhost", cfg.Port); err != nil {
@@ -343,18 +388,18 @@ func proxy(args []string) error {
 		fmt.Printf("Service: %s\n", st.Service)
 		return nil
 	default:
-		return fmt.Errorf("usage: psctl proxy [on|off|status]")
+		return fmt.Errorf("usage: velar proxy [on|off|status]")
 	}
 }
 
 func daemonCommand() (*exec.Cmd, error) {
-	if path, err := exec.LookPath("psd"); err == nil {
+	if path, err := exec.LookPath("velard"); err == nil {
 		return exec.Command(path), nil
 	}
-	if _, err := os.Stat(filepath.Join(".", "psd")); err == nil {
-		return exec.Command("./psd"), nil
+	if _, err := os.Stat(filepath.Join(".", "velard")); err == nil {
+		return exec.Command("./velard"), nil
 	}
-	return exec.Command("go", "run", "./cmd/psd"), nil
+	return exec.Command("go", "run", "./cmd/velard"), nil
 }
 
 func isDaemonRunning() bool {
@@ -445,19 +490,19 @@ func isProcessRunning(pid int) bool {
 }
 
 func pidFilePath() string {
-	home, err := os.UserHomeDir()
+	appDir, err := config.AppDir()
 	if err != nil {
-		return ".promptshield/promptshield.pid"
+		return ".velar/velar.pid"
 	}
-	return filepath.Join(home, ".promptshield", "promptshield.pid")
+	return filepath.Join(appDir, "velar.pid")
 }
 
 func daemonLogPath() (string, error) {
-	home, err := os.UserHomeDir()
+	appDir, err := config.AppDir()
 	if err != nil {
 		return "", err
 	}
-	return filepath.Join(home, ".promptshield", "daemon.log"), nil
+	return filepath.Join(appDir, "daemon.log"), nil
 }
 
 func enabledLabel(v bool) string {
@@ -470,7 +515,7 @@ func enabledLabel(v bool) string {
 func mustConfigPath() string {
 	p, err := config.ConfigPath()
 	if err != nil {
-		return "~/.promptshield/config.yaml"
+		return "~/.velar/config.yaml"
 	}
 	return p
 }

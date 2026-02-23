@@ -13,9 +13,9 @@ import (
 	"sync"
 	"testing"
 
-	"promptshield/internal/classifier"
-	"promptshield/internal/policy"
-	"promptshield/internal/sanitizer"
+	"velar/internal/classifier"
+	"velar/internal/policy"
+	"velar/internal/sanitizer"
 )
 
 type noopAudit struct{}

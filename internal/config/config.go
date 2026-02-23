@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -13,7 +14,7 @@ import (
 
 const (
 	defaultPort    = 8080
-	defaultLogFile = "~/.promptshield/audit.log"
+	defaultLogFile = "~/.velar/audit.log"
 )
 
 type Match struct {
@@ -80,11 +81,28 @@ func Default() Config {
 }
 
 func ConfigPath() (string, error) {
+	appDir, err := AppDir()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(appDir, "config.yaml"), nil
+}
+
+func AppDir() (string, error) {
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return "", err
 	}
-	return filepath.Join(home, ".promptshield", "config.yaml"), nil
+
+	velarDir := filepath.Join(home, ".velar")
+	legacyDir := filepath.Join(home, ".promptshield")
+
+	if !pathExists(velarDir) && pathExists(legacyDir) {
+		log.Printf("Deprecated config path ~/.promptshield detected, please migrate to ~/.velar")
+		return legacyDir, nil
+	}
+
+	return velarDir, nil
 }
 
 func Load(path string) (Config, error) {
@@ -94,6 +112,7 @@ func Load(path string) (Config, error) {
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
 			cfg.LogFile = expandHome(cfg.LogFile)
+			applyEnvOverrides(&cfg)
 			return cfg, nil
 		}
 		return Config{}, fmt.Errorf("read config: %w", err)
@@ -114,7 +133,58 @@ func Load(path string) (Config, error) {
 		cfg.Rules = Default().Rules
 	}
 
+	applyEnvOverrides(&cfg)
+
 	return cfg, nil
+}
+
+func applyEnvOverrides(cfg *Config) {
+	if v, ok := envString("VELAR_LOG_FILE", "PROMPTSHIELD_LOG_FILE"); ok {
+		cfg.LogFile = expandHome(v)
+	}
+	if v, ok := envInt("VELAR_PORT", "PROMPTSHIELD_PORT"); ok {
+		cfg.Port = v
+	}
+}
+
+func envString(newKey, oldKey string) (string, bool) {
+	if v, ok := lookupEnvTrimmed(newKey); ok {
+		return v, true
+	}
+	if v, ok := lookupEnvTrimmed(oldKey); ok {
+		log.Printf("Deprecated env var %s detected, please migrate to %s", oldKey, newKey)
+		return v, true
+	}
+	return "", false
+}
+
+func envInt(newKey, oldKey string) (int, bool) {
+	v, ok := envString(newKey, oldKey)
+	if !ok {
+		return 0, false
+	}
+	parsed, err := strconv.Atoi(v)
+	if err != nil {
+		return 0, false
+	}
+	return parsed, true
+}
+
+func lookupEnvTrimmed(key string) (string, bool) {
+	v, ok := os.LookupEnv(key)
+	if !ok {
+		return "", false
+	}
+	v = strings.TrimSpace(v)
+	if v == "" {
+		return "", false
+	}
+	return v, true
+}
+
+func pathExists(path string) bool {
+	_, err := os.Stat(path)
+	return err == nil
 }
 
 func EnsureConfigDir(path string) error {

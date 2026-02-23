@@ -1,8 +1,8 @@
 ⚠️ Experimental: use at your own risk. Behavior and APIs may change without notice.
 
-# PromptShield
+# Velar
 
-PromptShield is a local HTTP/HTTPS proxy with MITM support for AI traffic. It helps prevent sensitive data from leaving your machine by detecting and masking PII or secrets before requests reach AI providers. It also restores original values in responses so your tools keep working as expected.
+Velar is a local HTTP/HTTPS proxy with MITM support for AI traffic. It helps prevent sensitive data from leaving your machine by detecting and masking PII or secrets before requests reach AI providers. It also restores original values in responses so your tools keep working as expected.
 
 > 🔒 **100% Local Processing**: All detection, masking, and restoration happens entirely on your machine. Nothing is sent to external services for analysis or logging.
 
@@ -12,10 +12,10 @@ Developers and teams increasingly send prompts, logs, code, and customer data to
 
 ## Solution
 
-PromptShield runs locally as a proxy between your app and the AI provider. It can inspect outbound payloads, detect sensitive values, replace them with placeholders, and forward only sanitized content upstream. When the response comes back, PromptShield restores placeholders to original values for a seamless developer experience and can send local notifications about privacy-relevant activity.
+Velar runs locally as a proxy between your app and the AI provider. It can inspect outbound payloads, detect sensitive values, replace them with placeholders, and forward only sanitized content upstream. When the response comes back, Velar restores placeholders to original values for a seamless developer experience and can send local notifications about privacy-relevant activity.
 
 ```text
-App → PromptShield → AI provider
+App → Velar → AI provider
 ```
 
 ## Features
@@ -68,13 +68,13 @@ make build
 MITM mode requires a local CA certificate.
 
 ```bash
-./psctl ca init
+./velar ca init
 ```
 
 ### 4) Install certificate in your system trust store (macOS)
 
 ```bash
-open ~/.promptshield/ca/cert.pem
+open ~/.velar/ca/cert.pem
 ```
 
 Then in **Keychain Access**:
@@ -83,16 +83,16 @@ Then in **Keychain Access**:
 2. Open certificate trust settings
 3. Set **When using this certificate** to **Always Trust**
 
-### 5) Start PromptShield
+### 5) Start Velar
 
 ```bash
-./psctl start
+./velar start
 ```
 
 ### 6) Enable system proxy
 
 ```bash
-./psctl proxy on
+./velar proxy on
 ```
 
 ### 7) Test with curl
@@ -123,7 +123,7 @@ Request sent by your app:
 
 Behavior:
 
-- PromptShield detects `alice@company.com`
+- Velar detects `alice@company.com`
 - It sends `[EMAIL_1]` upstream instead of raw email
 - It restores original values in response content when mapped
 - It emits a local notification if notifications are enabled
@@ -134,7 +134,7 @@ Example `config.yaml`:
 
 ```yaml
 port: 8080
-log_file: ~/.promptshield/audit.log
+log_file: ~/.velar/audit.log
 mitm:
   enabled: true
   domains:
@@ -161,9 +161,19 @@ rules:
     action: allow
 ```
 
+## Migration from PromptShield
+
+- Default config path changed from `~/.promptshield/config.yaml` to `~/.velar/config.yaml`.
+- Default runtime directory changed from `~/.promptshield` to `~/.velar`.
+- Environment variables were renamed from `PROMPTSHIELD_*` to `VELAR_*`.
+- Backward compatibility is preserved:
+  - if `~/.velar` does not exist but `~/.promptshield` exists, Velar uses the legacy directory and logs:
+    `Deprecated config path ~/.promptshield detected, please migrate to ~/.velar`
+  - legacy `PROMPTSHIELD_PORT` and `PROMPTSHIELD_LOG_FILE` are still read, but Velar warns and prefers `VELAR_PORT` and `VELAR_LOG_FILE`.
+
 ## Performance
 
-PromptShield is designed to keep overhead low:
+Velar is designed to keep overhead low:
 
 - sanitizer stage is typically fast (~1–2ms for common payloads)
 - proxy overhead is minimal in local environments
@@ -186,7 +196,7 @@ PromptShield is designed to keep overhead low:
 
 ## Vision
 
-PromptShield aims to be the default privacy layer between developers and AI systems. The long-term goal is simple: make safe AI usage the path of least resistance.
+Velar aims to be the default privacy layer between developers and AI systems. The long-term goal is simple: make safe AI usage the path of least resistance.
 
 ## Contributing
 

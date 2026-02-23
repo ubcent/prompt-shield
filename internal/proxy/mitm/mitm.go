@@ -13,12 +13,12 @@ import (
 	"sync"
 	"time"
 
-	"promptshield/internal/audit"
-	"promptshield/internal/classifier"
-	"promptshield/internal/policy"
-	"promptshield/internal/sanitizer"
-	"promptshield/internal/session"
-	"promptshield/internal/trace"
+	"velar/internal/audit"
+	"velar/internal/classifier"
+	"velar/internal/policy"
+	"velar/internal/sanitizer"
+	"velar/internal/session"
+	"velar/internal/trace"
 )
 
 const (
@@ -106,7 +106,7 @@ func (h *Handler) serverHandler(connectHost string) http.Handler {
 		_ = h.classifier.Classify(host)
 		decision := h.policy.Evaluate(host)
 		if decision.Decision == policy.Block {
-			http.Error(w, "blocked by PromptShield policy", http.StatusForbidden)
+			http.Error(w, "blocked by Velar policy", http.StatusForbidden)
 			h.logAudit(r, host, decision, "", "")
 			return
 		}
