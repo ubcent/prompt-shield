@@ -63,7 +63,7 @@ jobs:
           -o dist/psctl-darwin-amd64 \
           ./cmd/psctl
 
-    - name: Create Release
+    - name: Create Release from tag
       if: startsWith(github.ref, 'refs/tags/v')
       uses: softprops/action-gh-release@v1
       with:
@@ -72,12 +72,24 @@ jobs:
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
+    - name: Create Release from workflow
+      if: github.event_name == 'workflow_run'
+      uses: softprops/action-gh-release@v1
+      with:
+        tag_name: ${{ steps.version.outputs.version }}
+        files: dist/*
+        generate_release_notes: true
+        prerelease: true
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
     - name: Upload artifacts
-      if: "!startsWith(github.ref, 'refs/tags/v')"
+      if: "!startsWith(github.ref, 'refs/tags/v') && github.event_name != 'workflow_run'"
       uses: actions/upload-artifact@v4
       with:
         name: binaries-${{ steps.version.outputs.version }}
         path: dist/
+
 
 
 
