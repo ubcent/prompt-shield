@@ -53,8 +53,8 @@ alice@company.com → [EMAIL_1]
 ### 1) Clone
 
 ```bash
-git clone https://github.com/ubcent/prompt-shield.git
-cd prompt-shield
+git clone https://github.com/ubcent/velar.git
+cd velar
 ```
 
 ### 2) Build
