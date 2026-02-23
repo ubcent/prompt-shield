@@ -4,6 +4,8 @@
 
 PromptShield is a local HTTP/HTTPS proxy with MITM support for AI traffic. It helps prevent sensitive data from leaving your machine by detecting and masking PII or secrets before requests reach AI providers. It also restores original values in responses so your tools keep working as expected.
 
+> 🔒 **100% Local Processing**: All detection, masking, and restoration happens entirely on your machine. Nothing is sent to external services for analysis or logging.
+
 ## Problem
 
 Developers and teams increasingly send prompts, logs, code, and customer data to AI tools. In many setups, there is no local protection layer between apps and external AI APIs. That gap can lead to accidental data leaks, compliance issues, and loss of control over what is shared.
