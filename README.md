@@ -66,7 +66,7 @@ make build
 MITM mode requires a local CA certificate.
 
 ```bash
-psctl ca init
+./psctl ca init
 ```
 
 ### 4) Install certificate in your system trust store (macOS)
@@ -84,13 +84,13 @@ Then in **Keychain Access**:
 ### 5) Start PromptShield
 
 ```bash
-psctl start
+./psctl start
 ```
 
 ### 6) Enable system proxy
 
 ```bash
-psctl proxy on
+./psctl proxy on
 ```
 
 ### 7) Test with curl
