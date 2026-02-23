@@ -1,210 +1,177 @@
-# PromptShield — AI Traffic Firewall for Developers
+# PromptShield
+Local Privacy Firewall for AI
 
-PromptShield is a local proxy that monitors, controls, and sanitizes AI/LLM traffic.
+PromptShield is a local HTTP/HTTPS proxy with MITM support for AI traffic. It helps prevent sensitive data from leaving your machine by detecting and masking PII or secrets before requests reach AI providers. It also restores original values in responses so your tools keep working as expected.
 
 ## Problem
 
-Developers regularly send prompts, code snippets, and tokens to services such as ChatGPT, Copilot, and other LLM APIs. Without an explicit control point, teams have limited visibility into what leaves developer machines, and limited ability to enforce policy before data is sent. This creates practical security and compliance risks:
-
-- accidental leakage of secrets or internal code
-- unmanaged access to external AI endpoints
-- poor auditability for incident response or governance
+Developers and teams increasingly send prompts, logs, code, and customer data to AI tools. In many setups, there is no local protection layer between apps and external AI APIs. That gap can lead to accidental data leaks, compliance issues, and loss of control over what is shared.
 
 ## Solution
 
-PromptShield runs locally as a security proxy between developer tools and LLM providers. It can:
-
-- intercept outbound traffic
-- apply policy decisions (`allow`, `block`, `mitm`)
-- optionally inspect and sanitize request content
-- produce structured audit logs for traceability
-
-## Key Features
-
-- HTTP/HTTPS proxy for local AI traffic control
-- selective MITM (TLS interception) per configured domains
-- policy engine with `allow` / `block` / `mitm` actions
-- prompt sanitization for PII and common secret patterns
-- JSONL audit logging for security analysis
-- system proxy integration on macOS (`psctl proxy on`)
-
-## Architecture (Short)
+PromptShield runs locally as a proxy between your app and the AI provider. It can inspect outbound payloads, detect sensitive values, replace them with placeholders, and forward only sanitized content upstream. When the response comes back, PromptShield restores placeholders to original values for a seamless developer experience and can send local notifications about privacy-relevant activity.
 
 ```text
-App → PromptShield → LLM APIs
+App → PromptShield → AI provider
 ```
 
-PromptShield consists of four core layers:
+## Features
 
-- **Proxy layer**: receives HTTP/HTTPS traffic from local clients
-- **Policy engine**: evaluates host-based rules and decides action
-- **Sanitizer**: redacts configured sensitive data patterns during inspected flows
-- **Audit logger**: stores request events as JSONL records
-
-For deeper details, see [docs/architecture.md](docs/architecture.md).
-
-## Quick Start
-
-### 1) Build
-
-```bash
-go build ./cmd/psd
-go build ./cmd/psctl
-```
-
-### 2) Generate local CA
-
-```bash
-./psctl ca init
-```
-
-### 3) Install certificate (macOS)
-
-1. Open the generated certificate:
-   ```bash
-   open ~/.promptshield/ca/cert.pem
-   ```
-2. Add it to **Keychain Access**.
-3. Open the certificate trust settings.
-4. Set **When using this certificate** to **Always Trust**.
-
-### 4) Start proxy
-
-```bash
-./psctl start
-```
-
-Default listener:
-
-```text
-http://localhost:8080
-```
-
-### 5) Enable system proxy (macOS)
-
-```bash
-./psctl proxy on
-```
-
-You can verify status with:
-
-```bash
-./psctl proxy status
-```
+- PII detection for common sensitive fields (email, phone, names, etc.)
+- Request masking with deterministic placeholders (for example: `[EMAIL_1]`)
+- Response restore to preserve downstream app behavior
+- macOS system notifications for key proxy/sanitization events
+- Streaming-safe behavior (does not break streaming flows)
+- System proxy integration for quick machine-wide routing
+- Performance instrumentation for sanitize, upstream, and total latency
 
 ## Demo
 
-```bash
-curl https://api.openai.com/v1/models \
-  -H "Authorization: Bearer sk-123..."
+[ Add demo video here ]
+
+## How it works
+
+1. **Intercept request** from your app via local HTTP/HTTPS proxy.
+2. **Detect sensitive data** using configured rules.
+3. **Mask detected values** with placeholders.
+4. **Send sanitized request upstream** to the AI provider.
+5. **Restore original values in the response** where applicable.
+6. **Notify locally** (macOS) when important events occur.
+
+Example transformation:
+
+```text
+alice@company.com → [EMAIL_1]
 ```
 
-When your system or shell proxy points to PromptShield:
+## Quick Start
 
-- the request is routed through the local proxy
-- policy rules are evaluated for `api.openai.com`
-- sensitive values can be masked in logged metadata
+### 1) Clone
 
-## Example Output
+```bash
+git clone https://github.com/your-org/promptshield.git
+cd promptshield
+```
 
-Example audit event (JSONL):
+### 2) Generate local CA certificate
+
+MITM mode requires a local CA certificate.
+
+```bash
+psctl ca init
+```
+
+### 3) Install certificate in your system trust store (macOS)
+
+```bash
+open ~/.promptshield/ca/cert.pem
+```
+
+Then in **Keychain Access**:
+
+1. Add the certificate to the login keychain
+2. Open certificate trust settings
+3. Set **When using this certificate** to **Always Trust**
+
+### 4) Start PromptShield
+
+```bash
+psctl start
+```
+
+### 5) Enable system proxy
+
+```bash
+psctl proxy on
+```
+
+### 6) Test with curl
+
+```bash
+curl -x http://localhost:8080 https://api.openai.com/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer $OPENAI_API_KEY" \
+  -d '{
+    "model": "gpt-4o-mini",
+    "messages": [
+      {"role":"user","content":"Contact me at alice@company.com"}
+    ]
+  }'
+```
+
+## Example
+
+Request sent by your app:
 
 ```json
 {
-  "ts": "2026-01-14T10:22:31Z",
-  "method": "POST",
-  "host": "api.openai.com",
-  "path": "/v1/chat/completions",
-  "decision": "mitm",
-  "sanitized": true,
-  "sanitized_items": ["api_key", "email"],
-  "status": 200,
-  "latency_ms": 241
+  "messages": [
+    {"role": "user", "content": "My email is alice@company.com"}
+  ]
 }
 ```
 
+Behavior:
+
+- PromptShield detects `alice@company.com`
+- It sends `[EMAIL_1]` upstream instead of raw email
+- It restores original values in response content when mapped
+- It emits a local notification if notifications are enabled
+
 ## Configuration
 
-See [docs/configuration.md](docs/configuration.md) for full configuration reference and policy examples.
+Example `config.yaml`:
 
-## Testing
+```yaml
+proxy:
+  port: 8080
 
-Запустить все тесты одной командой:
+mitm:
+  domains:
+    - api.openai.com
+    - api.anthropic.com
 
-```bash
-make test
+notifications:
+  macos: true
+
+rules:
+  - name: mask_emails
+    action: mask
+    detector: email
+  - name: block_high_risk_secrets
+    action: block
+    detector: api_key
 ```
 
-Эта команда:
-1. 🐳 Собирает Docker образы для proxy и echo сервисов
-2. ⏳ Ждет, пока сервисы пройдут healthcheck
-3. 🧪 Запускает все тесты (`go test ./...`)
-4. 🧹 Автоматически останавливает контейнеры
+## Performance
 
-### Структура тестов
+PromptShield is designed to keep overhead low:
 
-Все тесты находятся рядом с кодом:
-- `internal/*/` - unit тесты в `*_test.go` файлах
-- `internal/integration/` - интеграционные тесты с proxy и echo
+- sanitizer stage is typically fast (~1–2ms for common payloads)
+- proxy overhead is minimal in local environments
+- most end-to-end latency usually comes from upstream AI providers
 
-### Локальное тестирование
+## Limitations
 
-```bash
-# Запустить тесты локально (без Docker)
-go test ./...
-
-# С проверкой race conditions
-go test -race ./...
-```
-
-**Примечание:** Integration тесты требуют переменные окружения `PROXY_ADDR` и `ECHO_ADDR`.
-
-## Performance testing
-
-Для замера latency по этапам запроса (sanitize, ttfb, upstream, response) можно использовать встроенный скрипт:
-
-```bash
-./scripts/benchmark_trace.sh
-```
-
-Скрипт отправляет 2 запроса через локальный proxy `http://localhost:8080`:
-1. `GET /v1/models`
-2. `POST /v1/chat/completions`
-
-Перед запуском:
-1. Подними PromptShield (`./psctl start`)
-2. Убедись, что доступен внешний API endpoint (например `api.openai.com`)
-
-Пример ручного запуска команд из скрипта:
-
-```bash
-curl -x http://localhost:8080 https://api.openai.com/v1/models -k
-
-curl -x http://localhost:8080 https://api.openai.com/v1/chat/completions \
-  -H "Content-Type: application/json" \
-  -d '{"message":"test"}' -k
-```
-
-Логи трассировки пишутся в stdout процесса proxy (сэмплирование по умолчанию 10% запросов). Ищи строки вида:
-
-```text
-trace=<id> total=<d> sanitize=<d> ttfb=<d> upstream=<d> response=<d> first_byte_latency=<d> streaming=<bool>
-```
-
-## Security
-
-- MITM inspection is optional and domain-scoped.
-- Processing is local to your machine.
-- PromptShield does not require remote control-plane services for core operation.
-
-Read the full security guidance in [docs/security.md](docs/security.md).
+- Streaming responses are forwarded but not content-modified
+- Current sanitization focuses on text payloads
+- Notifications are currently focused on macOS
 
 ## Roadmap
 
-- system-level network agent mode (VPN/TUN)
-- VS Code extension for developer workflow visibility
-- enterprise policy packs, identity integration, and centralized audit shipping
+- broader secret detection coverage
+- stricter blocking mode with policy controls
+- extensible policy engine
+- local dashboard for visibility and debugging
 
-## Disclaimer
+## Vision
 
-PromptShield is a traffic interception tool. You should use it only in environments you trust and understand. Enabling HTTPS interception requires installing and trusting a local CA certificate. This project is intended for local development, security testing, and controlled internal usage.
+PromptShield aims to be the default privacy layer between developers and AI systems. The long-term goal is simple: make safe AI usage the path of least resistance.
+
+## Contributing
+
+Contributions are welcome. Please open an issue to discuss major changes, and submit a PR with clear scope, tests (when applicable), and updated documentation.
+
+## License
+
+MIT
