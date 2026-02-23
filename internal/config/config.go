@@ -42,10 +42,22 @@ type MITM struct {
 }
 
 type Sanitizer struct {
-	Enabled             bool     `json:"enabled"`
-	Types               []string `json:"types"`
-	ConfidenceThreshold float64  `json:"confidence_threshold"`
-	MaxReplacements     int      `json:"max_replacements"`
+	Enabled             bool      `json:"enabled"`
+	Types               []string  `json:"types"`
+	ConfidenceThreshold float64   `json:"confidence_threshold"`
+	MaxReplacements     int       `json:"max_replacements"`
+	Detectors           Detectors `json:"detectors"`
+}
+
+type Detectors struct {
+	ONNXNER ONNXNER `json:"onnx_ner"`
+}
+
+type ONNXNER struct {
+	Enabled   bool    `json:"enabled"`
+	MaxBytes  int     `json:"max_bytes"`
+	TimeoutMS int     `json:"timeout_ms"`
+	MinScore  float64 `json:"min_score"`
 }
 
 type Notifications struct {
@@ -54,10 +66,11 @@ type Notifications struct {
 
 func Default() Config {
 	return Config{
-		Port:          defaultPort,
-		LogFile:       defaultLogFile,
-		MITM:          MITM{},
-		Sanitizer:     Sanitizer{Types: []string{"email", "phone", "api_key", "jwt"}},
+		Port:    defaultPort,
+		LogFile: defaultLogFile,
+		MITM:    MITM{},
+		Sanitizer: Sanitizer{Types: []string{"email", "phone", "api_key", "jwt"},
+			Detectors: Detectors{ONNXNER: ONNXNER{Enabled: false, MaxBytes: 32 * 1024, TimeoutMS: 40, MinScore: 0.70}}},
 		Notifications: Notifications{Enabled: true},
 		Rules: []Rule{{
 			ID:     "allow_all",
@@ -132,6 +145,8 @@ func parseYAMLLite(r *strings.Reader, cfg *Config) error {
 	inSanitizer := false
 	inSanitizerTypes := false
 	inNotifications := false
+	inDetectors := false
+	inONNXNER := false
 	rulesFound := false
 
 	for s.Scan() {
@@ -175,6 +190,13 @@ func parseYAMLLite(r *strings.Reader, cfg *Config) error {
 			inSanitizerTypes = false
 			inNotifications = true
 			continue
+		case line == "detectors:" && inSanitizer:
+			inDetectors = true
+			inONNXNER = false
+			continue
+		case line == "onnx_ner:" && inDetectors:
+			inONNXNER = true
+			continue
 		case line == "domains:" && inMITM:
 			inMITMDomains = true
 			continue
@@ -210,6 +232,8 @@ func parseYAMLLite(r *strings.Reader, cfg *Config) error {
 		case strings.HasPrefix(line, "enabled:") && inMITM:
 			inMITMDomains = false
 			cfg.MITM.Enabled = strings.EqualFold(strings.TrimSpace(strings.TrimPrefix(line, "enabled:")), "true")
+		case strings.HasPrefix(line, "enabled:") && inONNXNER:
+			cfg.Sanitizer.Detectors.ONNXNER.Enabled = strings.EqualFold(strings.TrimSpace(strings.TrimPrefix(line, "enabled:")), "true")
 		case strings.HasPrefix(line, "enabled:") && inSanitizer:
 			cfg.Sanitizer.Enabled = strings.EqualFold(strings.TrimSpace(strings.TrimPrefix(line, "enabled:")), "true")
 		case strings.HasPrefix(line, "enabled:") && inNotifications:
@@ -228,6 +252,27 @@ func parseYAMLLite(r *strings.Reader, cfg *Config) error {
 				return fmt.Errorf("invalid max_replacements: %s", v)
 			}
 			cfg.Sanitizer.MaxReplacements = maxRepl
+		case strings.HasPrefix(line, "max_bytes:") && inONNXNER:
+			v := strings.TrimSpace(strings.TrimPrefix(line, "max_bytes:"))
+			maxBytes, err := strconv.Atoi(v)
+			if err != nil {
+				return fmt.Errorf("invalid max_bytes: %s", v)
+			}
+			cfg.Sanitizer.Detectors.ONNXNER.MaxBytes = maxBytes
+		case strings.HasPrefix(line, "timeout_ms:") && inONNXNER:
+			v := strings.TrimSpace(strings.TrimPrefix(line, "timeout_ms:"))
+			timeoutMS, err := strconv.Atoi(v)
+			if err != nil {
+				return fmt.Errorf("invalid timeout_ms: %s", v)
+			}
+			cfg.Sanitizer.Detectors.ONNXNER.TimeoutMS = timeoutMS
+		case strings.HasPrefix(line, "min_score:") && inONNXNER:
+			v := strings.TrimSpace(strings.TrimPrefix(line, "min_score:"))
+			minScore, err := strconv.ParseFloat(v, 64)
+			if err != nil {
+				return fmt.Errorf("invalid min_score: %s", v)
+			}
+			cfg.Sanitizer.Detectors.ONNXNER.MinScore = minScore
 		case strings.HasPrefix(line, "id:"):
 			inMITMDomains = false
 			inSanitizer = false

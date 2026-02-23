@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"promptshield/internal/detect"
 	"promptshield/internal/notifier"
 	"promptshield/internal/session"
 	"promptshield/internal/trace"
@@ -30,6 +31,7 @@ type AuditMetadata struct {
 
 type SanitizingInspector struct {
 	sanitizer            *Sanitizer
+	hybridDetector       detect.Detector
 	maxBodySize          int64
 	notificationsEnabled bool
 	sessions             *session.Store
@@ -37,6 +39,11 @@ type SanitizingInspector struct {
 
 func NewSanitizingInspector(s *Sanitizer) *SanitizingInspector {
 	return &SanitizingInspector{sanitizer: s, maxBodySize: defaultMaxBodyBytes, sessions: session.NewStore()}
+}
+
+func (i *SanitizingInspector) WithHybridDetector(d detect.Detector) *SanitizingInspector {
+	i.hybridDetector = d
+	return i
 }
 
 func (i *SanitizingInspector) WithNotifications(enabled bool) *SanitizingInspector {
@@ -143,8 +150,20 @@ func (i *SanitizingInspector) InspectRequest(r *http.Request) (*http.Request, er
 	}
 
 	log.Printf("sanitizer request body size: %d", len(body))
-	sanitized, items := i.sanitizer.Sanitize(string(body))
-	newBody := []byte(sanitized)
+	newBody := body
+	var items []SanitizedItem
+	if i.hybridDetector != nil {
+		sanitizedJSON, jsonItems, err := sanitizeJSONFields(r.Context(), body, i.hybridDetector, i.sanitizer.maxReplacements)
+		if err == nil {
+			newBody = sanitizedJSON
+			items = jsonItems
+		}
+	}
+	if len(items) == 0 {
+		sanitized, fallbackItems := i.sanitizer.Sanitize(string(body))
+		newBody = []byte(sanitized)
+		items = fallbackItems
+	}
 	restoreBody(r, newBody)
 	if len(items) > 0 {
 		log.Printf("sanitizer sensitive item count: %d", len(items))
