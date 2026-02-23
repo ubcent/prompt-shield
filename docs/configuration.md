@@ -1,18 +1,18 @@
 # Configuration
 
-PromptShield loads configuration from:
+Velar loads configuration from:
 
 ```text
-~/.promptshield/config.yaml
+~/.velar/config.yaml
 ```
 
-If the file does not exist, PromptShield starts with defaults and creates required local directories as needed.
+If the file does not exist, Velar starts with defaults and creates required local directories as needed.
 
 ## Full Example
 
 ```yaml
 port: 8080
-log_file: ~/.promptshield/audit.log
+log_file: ~/.velar/audit.log
 
 mitm:
   enabled: true
@@ -58,7 +58,7 @@ rules:
 
 - Destination for JSONL audit logs.
 - Supports `~/` home expansion.
-- Default: `~/.promptshield/audit.log`.
+- Default: `~/.velar/audit.log`.
 
 ### `mitm`
 
@@ -67,7 +67,7 @@ Controls TLS interception behavior.
 - `enabled`: global switch for MITM behavior
 - `domains`: allowlist of domains eligible for interception
 
-If `enabled: false`, PromptShield stays in tunnel behavior for HTTPS.
+If `enabled: false`, Velar stays in tunnel behavior for HTTPS.
 
 ### `sanitizer`
 
@@ -137,3 +137,13 @@ rules:
   - id: allow-others
     action: allow
 ```
+
+## Environment Variables
+
+Velar supports the following environment overrides:
+
+- `VELAR_PORT`
+- `VELAR_LOG_FILE`
+
+Legacy variables are still accepted for migration (`PROMPTSHIELD_PORT`, `PROMPTSHIELD_LOG_FILE`), but Velar prints a deprecation warning and prefers `VELAR_*` when both are set.
+

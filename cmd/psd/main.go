@@ -20,7 +20,7 @@ import (
 
 func main() {
 	if err := run(); err != nil {
-		log.Fatalf("psd failed: %v", err)
+		log.Fatalf("velar failed: %v", err)
 	}
 }
 

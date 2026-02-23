@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+
+	"promptshield/internal/config"
 )
 
 type ProxyConfig struct {
@@ -87,11 +89,11 @@ func parseProxyConfig(out string) (ProxyConfig, error) {
 }
 
 func backupFilePath() (string, error) {
-	home, err := os.UserHomeDir()
+	appDir, err := config.AppDir()
 	if err != nil {
 		return "", err
 	}
-	return filepath.Join(home, ".promptshield", "proxy_backup.json"), nil
+	return filepath.Join(appDir, "proxy_backup.json"), nil
 }
 
 func saveBackup(backup Backup) error {

@@ -88,7 +88,7 @@ func New(addr string, p policy.Engine, c classifier.Classifier, a audit.Logger, 
 }
 
 func (p *Proxy) Start() error {
-	log.Printf("promptshield daemon listening on %s", p.httpServer.Addr)
+	log.Printf("velar daemon listening on %s", p.httpServer.Addr)
 	err := p.httpServer.ListenAndServe()
 	if err != nil && !errors.Is(err, http.ErrServerClosed) {
 		return err
@@ -129,7 +129,7 @@ func (p *Proxy) handle(w http.ResponseWriter, r *http.Request) {
 	}()
 
 	if decision.Decision == policy.Block {
-		http.Error(w, "blocked by PromptShield policy", http.StatusForbidden)
+		http.Error(w, "blocked by Velar policy", http.StatusForbidden)
 		return
 	}
 

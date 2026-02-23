@@ -39,29 +39,16 @@ jobs:
     - name: Build binaries
       run: |
         mkdir -p dist
-        
-        # Build psd
+
         CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build \
           -ldflags="-X main.Version=${{ steps.version.outputs.version }}" \
-          -o dist/psd-linux-amd64 \
-          ./cmd/psd
-        
-        # Build psctl
-        CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build \
-          -ldflags="-X main.Version=${{ steps.version.outputs.version }}" \
-          -o dist/psctl-linux-amd64 \
-          ./cmd/psctl
-        
-        # Build for macOS (optional)
+          -o dist/velar-linux-amd64 \
+          ./cmd/velar
+
         CGO_ENABLED=0 GOOS=darwin GOARCH=amd64 go build \
           -ldflags="-X main.Version=${{ steps.version.outputs.version }}" \
-          -o dist/psd-darwin-amd64 \
-          ./cmd/psd
-        
-        CGO_ENABLED=0 GOOS=darwin GOARCH=amd64 go build \
-          -ldflags="-X main.Version=${{ steps.version.outputs.version }}" \
-          -o dist/psctl-darwin-amd64 \
-          ./cmd/psctl
+          -o dist/velar-darwin-amd64 \
+          ./cmd/velar
 
     - name: Create Release from tag
       if: startsWith(github.ref, 'refs/tags/v')

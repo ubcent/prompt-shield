@@ -177,7 +177,7 @@ func (i *SanitizingInspector) InspectRequest(r *http.Request) (*http.Request, er
 				"Detected: %s\nMasked before sending and restored locally",
 				strings.Join(uniqueTypes(items), ", "),
 			)
-			notifier.Notify("PromptShield", msg)
+			notifier.Notify("Velar", msg)
 		}
 		r = withAuditMetadata(r, AuditMetadata{Sanitized: true, Items: items})
 	}

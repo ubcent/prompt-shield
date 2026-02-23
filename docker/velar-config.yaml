@@ -1,5 +1,5 @@
 port: 8080
-log_file: /tmp/promptshield-audit.log
+log_file: /tmp/velar-audit.log
 mitm:
   enabled: false
 sanitizer:

@@ -2,11 +2,11 @@
 
 # Default target
 help:
-	@echo "PromptShield Makefile"
+	@echo "Velar Makefile"
 	@echo ""
 	@echo "Build targets:"
-	@echo "  make build    - Build psd and psctl binaries"
-	@echo "  make run      - Run psctl start"
+	@echo "  make build    - Build velar binary"
+	@echo "  make run      - Run velar start"
 	@echo ""
 	@echo "Test targets:"
 	@echo "  make test     - Run all tests in Docker"
@@ -16,11 +16,10 @@ help:
 
 build:
 	@mkdir -p bin
-	go build -o bin/psd ./cmd/psd
-	go build -o bin/psctl ./cmd/psctl
+	go build -o bin/velar ./cmd/velar
 
 run:
-	go run ./cmd/psctl start
+	go run ./cmd/velar start
 
 # Run all tests in Docker
 test:
