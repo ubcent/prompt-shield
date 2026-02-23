@@ -74,10 +74,11 @@ jobs:
 
     - name: Upload artifacts
       if: "!startsWith(github.ref, 'refs/tags/v')"
-      uses: actions/upload-artifact@v3
+      uses: actions/upload-artifact@v4
       with:
         name: binaries-${{ steps.version.outputs.version }}
         path: dist/
+
 
 
 
