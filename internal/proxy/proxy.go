@@ -18,6 +18,7 @@ import (
 	"promptshield/internal/policy"
 	"promptshield/internal/proxy/mitm"
 	"promptshield/internal/sanitizer"
+	"promptshield/internal/trace"
 )
 
 type Server interface {
@@ -132,6 +133,10 @@ func (p *Proxy) handle(w http.ResponseWriter, r *http.Request) {
 }
 
 func (p *Proxy) handleHTTP(w http.ResponseWriter, r *http.Request) {
+	requestTrace := trace.NewRequestTrace()
+	ctx := trace.WithContext(r.Context(), requestTrace)
+	r = r.WithContext(ctx)
+
 	outReq := r.Clone(r.Context())
 	outReq.RequestURI = ""
 	if outReq.URL.Scheme == "" {
@@ -144,25 +149,30 @@ func (p *Proxy) handleHTTP(w http.ResponseWriter, r *http.Request) {
 	if inspector == nil {
 		inspector = mitm.PassthroughInspector{}
 	}
-	t0 := time.Now()
+	requestTrace.SanitizeStart = time.Now()
 	outReq, err := inspector.InspectRequest(outReq)
-	log.Printf("sanitize took %v", time.Since(t0))
 	if err != nil {
+		requestTrace.SanitizeEnd = time.Now()
 		http.Error(w, "request inspection failed", http.StatusBadRequest)
 		return
 	}
+	requestTrace.SanitizeEnd = time.Now()
 
-	t1 := time.Now()
+	requestTrace.UpstreamStart = time.Now()
 	resp, err := p.transport.RoundTrip(outReq)
-	log.Printf("upstream request took %v", time.Since(t1))
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadGateway)
 		return
 	}
-	defer resp.Body.Close()
-	t2 := time.Now()
+	requestTrace.FirstByte = time.Now()
+	requestTrace.IsStreaming = strings.Contains(strings.ToLower(resp.Header.Get("Content-Type")), "text/event-stream")
+	resp.Body = requestTrace.TrackingReadCloser(resp.Body, func() {
+		requestTrace.UpstreamEnd = time.Now()
+	})
+
+	requestTrace.ResponseStart = time.Now()
 	resp, err = inspector.InspectResponse(resp)
-	log.Printf("response processing took %v", time.Since(t2))
+	requestTrace.ResponseEnd = time.Now()
 	if err != nil {
 		http.Error(w, "response inspection failed", http.StatusBadGateway)
 		return
@@ -171,6 +181,8 @@ func (p *Proxy) handleHTTP(w http.ResponseWriter, r *http.Request) {
 	copyHeader(w.Header(), resp.Header)
 	w.WriteHeader(resp.StatusCode)
 	_, _ = io.Copy(w, resp.Body)
+	_ = resp.Body.Close()
+	requestTrace.LogAt(time.Now())
 }
 
 func (p *Proxy) handleConnect(w http.ResponseWriter, r *http.Request) {

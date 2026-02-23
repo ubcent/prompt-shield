@@ -14,6 +14,7 @@ import (
 
 	"promptshield/internal/notifier"
 	"promptshield/internal/session"
+	"promptshield/internal/trace"
 )
 
 const defaultMaxBodyBytes int64 = 256 * 1024
@@ -86,6 +87,13 @@ type sessionIDContextKeyType struct{}
 var sessionIDContextKey = sessionIDContextKeyType{}
 
 func (i *SanitizingInspector) InspectRequest(r *http.Request) (*http.Request, error) {
+	if tr, ok := trace.FromContext(r.Context()); ok {
+		tr.SanitizeStart = time.Now()
+		defer func() {
+			tr.SanitizeEnd = time.Now()
+		}()
+	}
+
 	start := time.Now()
 	defer func() {
 		log.Printf("sanitize stage took %v", time.Since(start))
@@ -175,6 +183,15 @@ func uniqueTypes(items []SanitizedItem) []string {
 }
 
 func (i *SanitizingInspector) InspectResponse(r *http.Response) (*http.Response, error) {
+	if r != nil && r.Request != nil {
+		if tr, ok := trace.FromContext(r.Request.Context()); ok {
+			tr.ResponseStart = time.Now()
+			defer func() {
+				tr.ResponseEnd = time.Now()
+			}()
+		}
+	}
+
 	if r == nil || i == nil || i.sessions == nil {
 		return r, nil
 	}
