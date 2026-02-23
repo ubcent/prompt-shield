@@ -30,7 +30,7 @@ App → PromptShield → AI provider
 
 ## Demo
 
-[ Add demo video here ]
+![Demo](./assets/demo.gif)
 
 ## How it works
 
