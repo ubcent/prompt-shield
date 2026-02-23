@@ -1,6 +1,8 @@
 # PromptShield
 Local Privacy Firewall for AI
 
+> Experimental: use at your own risk. Behavior and APIs may change without notice.
+
 PromptShield is a local HTTP/HTTPS proxy with MITM support for AI traffic. It helps prevent sensitive data from leaving your machine by detecting and masking PII or secrets before requests reach AI providers. It also restores original values in responses so your tools keep working as expected.
 
 ## Problem
@@ -18,6 +20,7 @@ App → PromptShield → AI provider
 ## Features
 
 - PII detection for common sensitive fields (email, phone, names, etc.)
+- Current PII detection relies on local regex-based detectors only
 - Request masking with deterministic placeholders (for example: `[EMAIL_1]`)
 - Response restore to preserve downstream app behavior
 - macOS system notifications for key proxy/sanitization events
@@ -123,24 +126,32 @@ Behavior:
 Example `config.yaml`:
 
 ```yaml
-proxy:
-  port: 8080
-
+port: 8080
+log_file: ~/.promptshield/audit.log
 mitm:
+  enabled: true
   domains:
     - api.openai.com
-    - api.anthropic.com
-
+    - chatgpt.com
+sanitizer:
+  enabled: true
+  types:
+    - email
+  confidence_threshold: 0.8
+  max_replacements: 10
 notifications:
-  macos: true
-
+  enabled: true
 rules:
-  - name: mask_emails
-    action: mask
-    detector: email
-  - name: block_high_risk_secrets
-    action: block
-    detector: api_key
+  - id: mitm-openai
+    match:
+      host_contains: openai.com
+    action: mitm
+  - id: mitm-chatgpt
+    match:
+      host_contains: chatgpt.com
+    action: mitm
+  - id: allow-all
+    action: allow
 ```
 
 ## Performance
@@ -155,11 +166,13 @@ PromptShield is designed to keep overhead low:
 
 - Streaming responses are forwarded but not content-modified
 - Current sanitization focuses on text payloads
+- PII detection is regex-based today; higher-accuracy detection is planned
 - Notifications are currently focused on macOS
 
 ## Roadmap
 
 - broader secret detection coverage
+- integrate Microsoft Presidio for advanced PII detection
 - stricter blocking mode with policy controls
 - extensible policy engine
 - local dashboard for visibility and debugging
