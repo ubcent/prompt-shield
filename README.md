@@ -52,7 +52,7 @@ alice@company.com → [EMAIL_1]
 ### 1) Clone
 
 ```bash
-git clone https://github.com/your-org/promptshield.git
+git clone https://github.com/ubcent/promptshield.git
 cd promptshield
 ```
 
@@ -109,7 +109,7 @@ Request sent by your app:
 ```json
 {
   "messages": [
-    {"role": "user", "content": "My email is alice@company.com"}
+    {"role": "user", "content": "Contact me at alice@company.com"}
   ]
 }
 ```
