@@ -15,8 +15,9 @@ help:
 	@echo "  make clean    - Stop and remove Docker containers"
 
 build:
-	go build ./cmd/psd
-	go build ./cmd/psctl
+	@mkdir -p bin
+	go build -o bin/psd ./cmd/psd
+	go build -o bin/psctl ./cmd/psctl
 
 run:
 	go run ./cmd/psctl start
