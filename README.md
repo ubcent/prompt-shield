@@ -165,6 +165,19 @@ rules:
     action: allow
 ```
 
+
+## CLI Stats
+
+Use `velar stats` to view proxy activity from the terminal without opening a UI.
+
+- `velar stats`: current daemon status, uptime, request totals, masked item totals, latency averages, and top domains.
+- `velar stats --watch`: live refresh every 2 seconds until `Ctrl+C`.
+- `velar stats --recent`: last 20 requests (timestamp, domain, method, status, masked counts, latency).
+- `velar stats --export json`: machine-readable JSON output.
+- `velar stats --recent --export csv`: CSV export for recent requests.
+
+When the daemon stats API is unavailable, the command gracefully falls back to audit-log parsing.
+
 ## Migration from PromptShield
 
 - Default config path changed from `~/.promptshield/config.yaml` to `~/.velar/config.yaml`.

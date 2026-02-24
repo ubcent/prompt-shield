@@ -14,8 +14,12 @@ type Entry struct {
 	Method              string           `json:"method"`
 	Host                string           `json:"host"`
 	Path                string           `json:"path,omitempty"`
+	StatusCode          int              `json:"status_code,omitempty"`
 	Decision            string           `json:"decision"`
 	Reason              string           `json:"reason"`
+	SanitizeLatencyMs   float64          `json:"sanitize_latency_ms,omitempty"`
+	UpstreamLatencyMs   float64          `json:"upstream_latency_ms,omitempty"`
+	TotalLatencyMs      float64          `json:"total_latency_ms,omitempty"`
 	RequestBodyPreview  string           `json:"request_body_preview,omitempty"`
 	ResponseBodyPreview string           `json:"response_body_preview,omitempty"`
 	Sanitized           bool             `json:"sanitized,omitempty"`
