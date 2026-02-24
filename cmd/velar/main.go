@@ -48,6 +48,8 @@ func main() {
 		err = status()
 	case "logs":
 		err = logs()
+	case "stats":
+		err = statsCommand(flag.Args()[1:])
 	case "ca":
 		err = ca(flag.Args()[1:])
 	case "proxy":
@@ -65,7 +67,7 @@ func main() {
 }
 
 func usage() {
-	fmt.Println("Usage: velar [start|stop|restart|status|logs|ca init|ca print|proxy on|proxy off|proxy status]")
+	fmt.Println("Usage: velar [start|stop|restart|status|logs|stats|ca init|ca print|proxy on|proxy off|proxy status]")
 }
 
 func loadConfig() (config.Config, error) {

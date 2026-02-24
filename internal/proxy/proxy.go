@@ -1,6 +1,7 @@
 package proxy
 
 import (
+	"bufio"
 	"context"
 	"crypto/tls"
 	"errors"
@@ -102,14 +103,15 @@ func (p *Proxy) Shutdown(ctx context.Context) error {
 
 func (p *Proxy) handle(w http.ResponseWriter, r *http.Request) {
 	start := time.Now()
+	rec := &statusRecorder{ResponseWriter: w, status: http.StatusOK}
 	defer func() {
 		log.Printf("request %s took %v", r.URL, time.Since(start))
 	}()
 
 	// Health check endpoint
 	if r.URL.Path == "/health" {
-		w.WriteHeader(http.StatusOK)
-		_, _ = w.Write([]byte("OK"))
+		rec.WriteHeader(http.StatusOK)
+		_, _ = rec.Write([]byte("OK"))
 		return
 	}
 
@@ -123,23 +125,55 @@ func (p *Proxy) handle(w http.ResponseWriter, r *http.Request) {
 
 	entry := audit.Entry{Method: r.Method, Host: host, Path: r.URL.Path, Decision: string(decision.Decision), Reason: fmt.Sprintf("%s (%s)", decision.Reason, decision.RuleID)}
 	defer func() {
+		entry.StatusCode = rec.status
+		entry.TotalLatencyMs = float64(time.Since(start).Microseconds()) / 1000
 		if err := p.audit.Log(entry); err != nil {
 			log.Printf("audit log error: %v", err)
 		}
 	}()
 
 	if decision.Decision == policy.Block {
-		http.Error(w, "blocked by Velar policy", http.StatusForbidden)
+		http.Error(rec, "blocked by Velar policy", http.StatusForbidden)
 		return
 	}
 
 	if r.Method == http.MethodConnect {
-		p.handleConnect(w, r)
+		p.handleConnect(rec, r)
 		return
 	}
-	p.handleHTTP(w, r)
+	p.handleHTTP(rec, r)
 }
 
+type statusRecorder struct {
+	http.ResponseWriter
+	status int
+}
+
+func (r *statusRecorder) WriteHeader(statusCode int) {
+	r.status = statusCode
+	r.ResponseWriter.WriteHeader(statusCode)
+}
+
+func (r *statusRecorder) Write(p []byte) (int, error) {
+	if r.status == 0 {
+		r.status = http.StatusOK
+	}
+	return r.ResponseWriter.Write(p)
+}
+
+func (r *statusRecorder) Hijack() (net.Conn, *bufio.ReadWriter, error) {
+	hj, ok := r.ResponseWriter.(http.Hijacker)
+	if !ok {
+		return nil, nil, fmt.Errorf("hijacking not supported")
+	}
+	return hj.Hijack()
+}
+
+func (r *statusRecorder) Flush() {
+	if f, ok := r.ResponseWriter.(http.Flusher); ok {
+		f.Flush()
+	}
+}
 func (p *Proxy) handleHTTP(w http.ResponseWriter, r *http.Request) {
 	requestTrace := trace.NewRequestTrace()
 	ctx := trace.WithContext(r.Context(), requestTrace)
