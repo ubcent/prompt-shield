@@ -214,17 +214,15 @@ func (i *SanitizingInspector) InspectResponse(r *http.Response) (*http.Response,
 	if r == nil || i == nil || i.sessions == nil {
 		return r, nil
 	}
-	if strings.Contains(strings.ToLower(r.Header.Get("Content-Type")), "text/event-stream") {
+	if !isTextContent(r.Header.Get("Content-Type")) && !isStreamingResponse(r) {
 		return r, nil
 	}
-	if !isTextContent(r.Header.Get("Content-Type")) {
-		return r, nil
-	}
+	streaming := isStreamingResponse(r)
 	limit := i.maxBodySize
 	if limit <= 0 {
 		limit = defaultMaxBodyBytes
 	}
-	if r.ContentLength > limit || r.ContentLength < 0 {
+	if !streaming && (r.ContentLength > limit || r.ContentLength < 0) {
 		return r, nil
 	}
 	if r.Request == nil {
@@ -238,6 +236,12 @@ func (i *SanitizingInspector) InspectResponse(r *http.Response) (*http.Response,
 	// to ensure the mapping is available for response restoration
 	sess, ok := i.sessions.Get(sessionID)
 	if !ok || len(sess.Mapping) == 0 || r.Body == nil {
+		return r, nil
+	}
+	if streaming {
+		r.Body = NewStreamingRestorer(r.Body, sess.Mapping)
+		r.ContentLength = -1
+		r.Header.Del("Content-Length")
 		return r, nil
 	}
 	body, err := io.ReadAll(io.LimitReader(r.Body, limit+1))
@@ -258,6 +262,21 @@ func (i *SanitizingInspector) InspectResponse(r *http.Response) (*http.Response,
 	r.Header.Set("Content-Length", strconv.Itoa(len(newBody)))
 	r.Header.Del("Transfer-Encoding")
 	return r, nil
+}
+
+func isStreamingResponse(r *http.Response) bool {
+	if r == nil {
+		return false
+	}
+	if strings.Contains(strings.ToLower(r.Header.Get("Content-Type")), "text/event-stream") {
+		return true
+	}
+	for _, v := range r.TransferEncoding {
+		if strings.EqualFold(v, "chunked") {
+			return true
+		}
+	}
+	return false
 }
 
 func withAuditMetadata(r *http.Request, md AuditMetadata) *http.Request {
