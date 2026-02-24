@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 )
 
 const (
@@ -88,6 +89,8 @@ func ConfigPath() (string, error) {
 	return filepath.Join(appDir, "config.yaml"), nil
 }
 
+var legacyConfigWarnOnce sync.Once
+
 func AppDir() (string, error) {
 	home, err := os.UserHomeDir()
 	if err != nil {
@@ -98,7 +101,9 @@ func AppDir() (string, error) {
 	legacyDir := filepath.Join(home, ".promptshield")
 
 	if !pathExists(velarDir) && pathExists(legacyDir) {
-		log.Printf("Deprecated config path ~/.promptshield detected, please migrate to ~/.velar")
+		legacyConfigWarnOnce.Do(func() {
+			log.Printf("Deprecated config path ~/.promptshield detected, please migrate to ~/.velar")
+		})
 		return legacyDir, nil
 	}
 

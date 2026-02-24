@@ -15,9 +15,9 @@ help:
 	@echo "  make clean    - Stop and remove Docker containers"
 
 build:
-	@mkdir -p bin
-	go build -o bin/velar ./cmd/velar
-	go build -o bin/velard ./cmd/velard
+	@mkdir -p ./bin
+	go build -o ./bin/velar ./cmd/velar
+	go build -o ./bin/velard ./cmd/velard
 
 run:
 	go run ./cmd/velar start
