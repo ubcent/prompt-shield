@@ -190,7 +190,19 @@ func (h *Handler) serverHandler(connectHost string) http.Handler {
 		})
 
 		if isStreamingResponse(resp) {
-			log.Printf("response processing skipped for streaming response")
+			log.Printf("processing streaming response")
+			requestTrace.ResponseStart = time.Now()
+
+			// Inspector will wrap body with StreamingRestorer if needed
+			resp, err = h.inspector.InspectResponse(resp)
+			if err != nil {
+				requestTrace.ResponseEnd = time.Now()
+				log.Printf("MITM: streaming response inspection failed: %v", err)
+				http.Error(w, "response inspection failed", http.StatusBadGateway)
+				return
+			}
+			requestTrace.ResponseEnd = time.Now()
+
 			copyHeader(w.Header(), resp.Header)
 			w.WriteHeader(resp.StatusCode)
 			_, _ = io.Copy(w, resp.Body)

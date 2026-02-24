@@ -214,10 +214,11 @@ func (i *SanitizingInspector) InspectResponse(r *http.Response) (*http.Response,
 	if r == nil || i == nil || i.sessions == nil {
 		return r, nil
 	}
-	if !isTextContent(r.Header.Get("Content-Type")) && !isStreamingResponse(r) {
+	contentType := r.Header.Get("Content-Type")
+	streaming := isStreamingResponse(r)
+	if !isTextContent(contentType) && !streaming {
 		return r, nil
 	}
-	streaming := isStreamingResponse(r)
 	limit := i.maxBodySize
 	if limit <= 0 {
 		limit = defaultMaxBodyBytes

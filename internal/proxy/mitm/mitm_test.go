@@ -276,8 +276,9 @@ func TestStreamingResponseSkipsInspectionAndRestore(t *testing.T) {
 	if inspector.requestCalls != 1 {
 		t.Fatalf("InspectRequest calls = %d, want 1", inspector.requestCalls)
 	}
-	if inspector.responseCalls != 0 {
-		t.Fatalf("InspectResponse calls = %d, want 0 for event-stream", inspector.responseCalls)
+	// Streaming responses now go through InspectResponse for placeholder restoration
+	if inspector.responseCalls != 1 {
+		t.Fatalf("InspectResponse calls = %d, want 1 for event-stream", inspector.responseCalls)
 	}
 	if got := rec.Header().Get("Content-Type"); !strings.Contains(strings.ToLower(got), "text/event-stream") {
 		t.Fatalf("content-type = %q, want text/event-stream", got)
