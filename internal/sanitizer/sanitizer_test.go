@@ -143,3 +143,14 @@ func BenchmarkStreamingRestorerChunkLatency(b *testing.B) {
 		_ = restorer.Close()
 	}
 }
+
+func TestSanitizerReplacesDatabaseURL(t *testing.T) {
+	s := New(DetectorsByName([]string{"db_url"}))
+	out, items := s.Sanitize("dsn=postgresql://user:secret123@db.example.com:5432/mydb")
+	if !strings.Contains(out, "[DB_URL_1]") {
+		t.Fatalf("expected DB_URL placeholder, got %q", out)
+	}
+	if len(items) != 1 || items[0].Type != "db_url" {
+		t.Fatalf("unexpected items: %+v", items)
+	}
+}
