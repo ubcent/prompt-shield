@@ -34,11 +34,17 @@ type SanitizingInspector struct {
 	hybridDetector       detect.Detector
 	maxBodySize          int64
 	notificationsEnabled bool
+	restoreResponses     bool
 	sessions             *session.Store
 }
 
 func NewSanitizingInspector(s *Sanitizer) *SanitizingInspector {
-	return &SanitizingInspector{sanitizer: s, maxBodySize: defaultMaxBodyBytes, sessions: session.NewStore()}
+	return &SanitizingInspector{
+		sanitizer:        s,
+		maxBodySize:      defaultMaxBodyBytes,
+		restoreResponses: true, // Default to enabled
+		sessions:         session.NewStore(),
+	}
 }
 
 func (i *SanitizingInspector) WithHybridDetector(d detect.Detector) *SanitizingInspector {
@@ -48,6 +54,11 @@ func (i *SanitizingInspector) WithHybridDetector(d detect.Detector) *SanitizingI
 
 func (i *SanitizingInspector) WithNotifications(enabled bool) *SanitizingInspector {
 	i.notificationsEnabled = enabled
+	return i
+}
+
+func (i *SanitizingInspector) WithRestoreResponses(enabled bool) *SanitizingInspector {
+	i.restoreResponses = enabled
 	return i
 }
 
@@ -229,6 +240,11 @@ func (i *SanitizingInspector) InspectResponse(r *http.Response) (*http.Response,
 	if r.Request == nil {
 		return r, nil
 	}
+	// Skip restoration if disabled in config
+	if !i.restoreResponses {
+		return r, nil
+	}
+
 	sessionID := session.GetIDFromContext(r.Request.Context())
 	if sessionID == "" {
 		return r, nil

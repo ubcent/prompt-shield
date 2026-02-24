@@ -48,6 +48,7 @@ type Sanitizer struct {
 	Types               []string  `json:"types"`
 	ConfidenceThreshold float64   `json:"confidence_threshold"`
 	MaxReplacements     int       `json:"max_replacements"`
+	RestoreResponses    bool      `json:"restore_responses"`
 	Detectors           Detectors `json:"detectors"`
 }
 
@@ -71,8 +72,11 @@ func Default() Config {
 		Port:    defaultPort,
 		LogFile: defaultLogFile,
 		MITM:    MITM{},
-		Sanitizer: Sanitizer{Types: []string{"email", "phone", "api_key", "jwt"},
-			Detectors: Detectors{ONNXNER: ONNXNER{Enabled: false, MaxBytes: 32 * 1024, TimeoutMS: 40, MinScore: 0.70}}},
+		Sanitizer: Sanitizer{
+			Types:            []string{"email", "phone", "api_key", "jwt"},
+			RestoreResponses: true,
+			Detectors:        Detectors{ONNXNER: ONNXNER{Enabled: false, MaxBytes: 32 * 1024, TimeoutMS: 40, MinScore: 0.70}},
+		},
 		Notifications: Notifications{Enabled: true},
 		Rules: []Rule{{
 			ID:     "allow_all",
@@ -327,6 +331,8 @@ func parseYAMLLite(r *strings.Reader, cfg *Config) error {
 				return fmt.Errorf("invalid max_replacements: %s", v)
 			}
 			cfg.Sanitizer.MaxReplacements = maxRepl
+		case strings.HasPrefix(line, "restore_responses:") && inSanitizer:
+			cfg.Sanitizer.RestoreResponses = strings.EqualFold(strings.TrimSpace(strings.TrimPrefix(line, "restore_responses:")), "true")
 		case strings.HasPrefix(line, "max_bytes:") && inONNXNER:
 			v := strings.TrimSpace(strings.TrimPrefix(line, "max_bytes:"))
 			maxBytes, err := strconv.Atoi(v)

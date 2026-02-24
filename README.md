@@ -146,6 +146,7 @@ sanitizer:
     - email
   confidence_threshold: 0.8
   max_replacements: 10
+  restore_responses: true  # Restore masked values in responses (default: true)
 notifications:
   enabled: true
 rules:
