@@ -2,10 +2,11 @@ package sanitizer
 
 import (
 	"encoding/base64"
-	"math"
 	"regexp"
 	"strings"
 	"unicode"
+
+	"velar/internal/detect"
 )
 
 var (
@@ -43,7 +44,7 @@ func (APIKeyDetector) Detect(text string) []Match {
 		if !hasAlphaNum(candidate) {
 			continue
 		}
-		if entropy(candidate) < 3.2 {
+		if detect.ShannonEntropy(candidate) < 3.2 {
 			continue
 		}
 		matches = append(matches, Match{Type: "api_key", Value: candidate, Start: idx[0], End: idx[1], Confidence: 0.8})
@@ -68,6 +69,25 @@ func (JWTDetector) Detect(text string) []Match {
 	return matches
 }
 
+type SecretDetector struct{}
+
+func (SecretDetector) Name() string { return "secret" }
+
+func (SecretDetector) Detect(text string) []Match {
+	secretMatches := detect.FindSecretMatches(text)
+	out := make([]Match, 0, len(secretMatches))
+	for _, m := range secretMatches {
+		out = append(out, Match{
+			Type:       strings.ToLower(m.Type),
+			Value:      m.Value,
+			Start:      m.Start,
+			End:        m.End,
+			Confidence: m.Score,
+		})
+	}
+	return out
+}
+
 func findRegexMatches(text string, re *regexp.Regexp, typ string, confidence float64) []Match {
 	indexes := re.FindAllStringIndex(text, -1)
 	matches := make([]Match, 0, len(indexes))
@@ -88,23 +108,6 @@ func hasAlphaNum(s string) bool {
 		}
 	}
 	return hasDigit && hasLetter
-}
-
-func entropy(s string) float64 {
-	if s == "" {
-		return 0
-	}
-	freq := map[rune]float64{}
-	for _, r := range s {
-		freq[r]++
-	}
-	length := float64(len(s))
-	var res float64
-	for _, count := range freq {
-		p := count / length
-		res -= p * math.Log2(p)
-	}
-	return res
 }
 
 func looksLikeJWT(s string) bool {

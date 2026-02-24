@@ -25,7 +25,8 @@ App → Velar → AI provider
 ## Features
 
 - PII detection for common sensitive fields (email, phone, names, etc.)
-- Current PII detection relies on local regex-based detectors only
+- Secret detection for AWS/GCP/Azure credentials, private keys, DB URLs, JWTs, and high-entropy strings
+- Current detection relies on local regex-based detectors only
 - Request masking with deterministic placeholders (for example: `[EMAIL_1]`)
 - Response restore to preserve downstream app behavior
 - macOS system notifications for key proxy/sanitization events
@@ -144,6 +145,8 @@ sanitizer:
   enabled: true
   types:
     - email
+    - aws_access_key
+    - db_url
   confidence_threshold: 0.8
   max_replacements: 10
   restore_responses: true  # Restore masked values in responses (default: true)
