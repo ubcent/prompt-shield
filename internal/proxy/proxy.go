@@ -173,7 +173,7 @@ func (p *Proxy) handleHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	requestTrace.FirstByte = time.Now()
-	requestTrace.IsStreaming = strings.Contains(strings.ToLower(resp.Header.Get("Content-Type")), "text/event-stream")
+	requestTrace.IsStreaming = isStreaming(resp)
 	resp.Body = requestTrace.TrackingReadCloser(resp.Body, func() {
 		requestTrace.UpstreamEnd = time.Now()
 	})
@@ -191,6 +191,21 @@ func (p *Proxy) handleHTTP(w http.ResponseWriter, r *http.Request) {
 	_, _ = io.Copy(w, resp.Body)
 	_ = resp.Body.Close()
 	requestTrace.LogAt(time.Now())
+}
+
+func isStreaming(resp *http.Response) bool {
+	if resp == nil {
+		return false
+	}
+	if strings.Contains(strings.ToLower(resp.Header.Get("Content-Type")), "text/event-stream") {
+		return true
+	}
+	for _, v := range resp.TransferEncoding {
+		if strings.EqualFold(v, "chunked") {
+			return true
+		}
+	}
+	return false
 }
 
 func (p *Proxy) handleConnect(w http.ResponseWriter, r *http.Request) {
