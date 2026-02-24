@@ -6,6 +6,10 @@ Velar is a local HTTP/HTTPS proxy with MITM support for AI traffic. It helps pre
 
 > 🔒 **100% Local Processing**: All detection, masking, and restoration happens entirely on your machine. Nothing is sent to external services for analysis or logging.
 
+## Demo
+
+![Demo](./assets/demo.gif)
+
 ## Problem
 
 Developers and teams increasingly send prompts, logs, code, and customer data to AI tools. In many setups, there is no local protection layer between apps and external AI APIs. That gap can lead to accidental data leaks, compliance issues, and loss of control over what is shared.
@@ -28,10 +32,6 @@ App → Velar → AI provider
 - Streaming-safe behavior (does not break streaming flows)
 - System proxy integration for quick machine-wide routing
 - Performance instrumentation for sanitize, upstream, and total latency
-
-## Demo
-
-![Demo](./assets/demo.gif)
 
 ## How it works
 
