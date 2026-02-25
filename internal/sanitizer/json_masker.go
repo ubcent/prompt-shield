@@ -11,7 +11,7 @@ import (
 )
 
 var interestingKeys = map[string]struct{}{
-	"prompt": {}, "input": {}, "content": {}, "text": {}, "message": {},
+	"prompt": {}, "input": {}, "content": {}, "text": {}, "message": {}, "parts": {},
 }
 
 func sanitizeJSONFields(ctx context.Context, raw []byte, detector detect.Detector, maxReplacements int) ([]byte, []SanitizedItem, error) {
