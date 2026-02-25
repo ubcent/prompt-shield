@@ -1,0 +1,35 @@
+{
+  "version": "1.0.0",
+  "models": [
+    {
+      "name": "ner_en",
+      "display_name": "English NER Model",
+      "version": "1.0.0",
+      "language": "en",
+      "url": "https://huggingface.co/dslim/bert-base-NER/resolve/main/model.onnx",
+      "checksum": "sha256:REPLACE_WITH_RELEASE_CHECKSUM",
+      "size_bytes": 52428800,
+      "entity_types": [
+        "PERSON",
+        "ORG",
+        "GPE",
+        "EMAIL",
+        "PHONE",
+        "CREDIT_CARD",
+        "SSN"
+      ],
+      "description": "dslim/bert-base-NER model for English PII detection (Hugging Face)",
+      "architecture": "BERT-base (dslim/bert-base-NER)",
+      "accuracy": {
+        "f1_score": 0.93,
+        "benchmark": "CoNLL-2003"
+      },
+      "requirements": {
+        "min_memory_mb": 512,
+        "onnx_version": "1.12+"
+      },
+      "license": "MIT",
+      "recommended": true
+    }
+  ]
+}
