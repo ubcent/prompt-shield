@@ -6,6 +6,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -56,20 +57,73 @@ func (d *Downloader) DownloadAndInstall(ctx context.Context, model ModelSpec, mo
 	}
 	defer os.RemoveAll(tmpDir)
 
-	archivePath := filepath.Join(tmpDir, model.Name+".tar.gz")
-	if err := d.downloadWithRetry(ctx, model.URL, archivePath, onProgress); err != nil {
-		return err
-	}
-	if err := VerifyChecksum(archivePath, model.Checksum); err != nil {
-		return err
-	}
-
 	extractDir := filepath.Join(tmpDir, "extract")
 	if err := os.MkdirAll(extractDir, 0o755); err != nil {
 		return err
 	}
-	if err := ExtractTarGz(archivePath, extractDir); err != nil {
+
+	downloadPath := filepath.Join(tmpDir, "download.bin")
+	if err := d.downloadWithRetry(ctx, model.URL, downloadPath, onProgress); err != nil {
 		return err
+	}
+	if err := VerifyChecksum(downloadPath, model.Checksum); err != nil {
+		return err
+	}
+
+	isGzip, err := isGzipFile(downloadPath)
+	if err != nil {
+		return err
+	}
+	if isGzip {
+		if err := ExtractTarGz(downloadPath, extractDir); err != nil {
+			return err
+		}
+	} else {
+		// Direct ONNX download: move model file and fetch auxiliary files
+		if err := os.Rename(downloadPath, filepath.Join(extractDir, "model.onnx")); err != nil {
+			return err
+		}
+
+		// Download tokenizer.json
+		if model.TokenizerURL != "" {
+			tokPath := filepath.Join(extractDir, "tokenizer.json")
+			if err := d.downloadWithRetry(ctx, model.TokenizerURL, tokPath, nil); err != nil {
+				return fmt.Errorf("download tokenizer: %w", err)
+			}
+		} else {
+			// Fallback to embedded assets
+			_, tokenizer, ok := EmbeddedAuxFiles(model.Name)
+			if !ok {
+				return fmt.Errorf("tokenizer_url missing and no embedded assets for model %q", model.Name)
+			}
+			if err := os.WriteFile(filepath.Join(extractDir, "tokenizer.json"), tokenizer, 0o644); err != nil {
+				return err
+			}
+		}
+
+		// Download and convert config.json to labels.json
+		if model.ConfigURL != "" {
+			configPath := filepath.Join(tmpDir, "config.json")
+			if err := d.downloadWithRetry(ctx, model.ConfigURL, configPath, nil); err != nil {
+				return fmt.Errorf("download config: %w", err)
+			}
+			labelsData, err := extractLabelsFromConfig(configPath)
+			if err != nil {
+				return fmt.Errorf("extract labels from config: %w", err)
+			}
+			if err := os.WriteFile(filepath.Join(extractDir, "labels.json"), labelsData, 0o644); err != nil {
+				return err
+			}
+		} else {
+			// Fallback to embedded assets
+			labels, _, ok := EmbeddedAuxFiles(model.Name)
+			if !ok {
+				return fmt.Errorf("config_url missing and no embedded assets for model %q", model.Name)
+			}
+			if err := os.WriteFile(filepath.Join(extractDir, "labels.json"), labels, 0o644); err != nil {
+				return err
+			}
+		}
 	}
 
 	if err := ValidateModelDir(extractDir); err != nil {
@@ -270,4 +324,34 @@ func ValidateModelDir(base string) error {
 		}
 	}
 	return fmt.Errorf("invalid model archive: missing required files")
+}
+
+func isGzipFile(path string) (bool, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return false, err
+	}
+	defer f.Close()
+	var hdr [2]byte
+	if _, err := io.ReadFull(f, hdr[:]); err != nil {
+		return false, err
+	}
+	return hdr[0] == 0x1f && hdr[1] == 0x8b, nil
+}
+
+func extractLabelsFromConfig(configPath string) ([]byte, error) {
+	data, err := os.ReadFile(configPath)
+	if err != nil {
+		return nil, err
+	}
+	var cfg struct {
+		ID2Label map[string]string `json:"id2label"`
+	}
+	if err := json.Unmarshal(data, &cfg); err != nil {
+		return nil, err
+	}
+	if len(cfg.ID2Label) == 0 {
+		return nil, fmt.Errorf("id2label not found in config")
+	}
+	return json.Marshal(cfg.ID2Label)
 }

@@ -33,6 +33,8 @@ type ModelSpec struct {
 	Version      string       `json:"version"`
 	Language     string       `json:"language"`
 	URL          string       `json:"url"`
+	TokenizerURL string       `json:"tokenizer_url,omitempty"`
+	ConfigURL    string       `json:"config_url,omitempty"`
 	Checksum     string       `json:"checksum"`
 	SizeBytes    int64        `json:"size_bytes"`
 	EntityTypes  []string     `json:"entity_types"`
