@@ -1,0 +1,26 @@
+name: Homebrew Formula Test
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+    paths:
+      - 'Formula/velar.rb'
+      - 'homebrew-velar/Formula/velar.rb'
+      - '.github/workflows/homebrew-test.yml'
+
+jobs:
+  homebrew-test:
+    runs-on: macos-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Show brew version
+        run: brew --version
+
+      - name: Validate formula syntax
+        run: brew audit --strict Formula/velar.rb
+
+      - name: Validate tap formula syntax
+        run: brew audit --strict homebrew-velar/Formula/velar.rb

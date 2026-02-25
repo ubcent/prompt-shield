@@ -2,6 +2,8 @@
 
 # Velar
 
+[![Homebrew Tap](https://img.shields.io/badge/homebrew-velar-blue?logo=homebrew)](https://github.com/dmitrybondarchuk/homebrew-velar)
+
 Velar is a local HTTP/HTTPS proxy with MITM support for AI traffic. It helps prevent sensitive data from leaving your machine by detecting and masking PII or secrets before requests reach AI providers. It also restores original values in responses so your tools keep working as expected.
 
 > 🔒 **100% Local Processing**: All detection, masking, and restoration happens entirely on your machine. Nothing is sent to external services for analysis or logging.
@@ -50,6 +52,15 @@ alice@company.com → [EMAIL_1]
 ```
 
 ## Quick Start
+
+### Install via Homebrew (macOS)
+
+```bash
+brew tap dmitrybondarchuk/velar
+brew install velar
+```
+
+Start the daemon with `brew services start velar`. See [`docs/installation.md`](docs/installation.md) for full setup and upgrade instructions.
 
 ### 1) Clone
 

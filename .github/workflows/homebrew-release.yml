@@ -1,0 +1,73 @@
+name: Homebrew Release
+
+on:
+  release:
+    types: [published]
+
+jobs:
+  update-tap-formula:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout source repo
+        uses: actions/checkout@v4
+
+      - name: Extract version
+        run: echo "VERSION=${GITHUB_REF#refs/tags/}" >> "$GITHUB_ENV"
+
+      - name: Download Darwin release artifacts
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release download "$VERSION" --repo "$GITHUB_REPOSITORY" --pattern 'velar-darwin-*.tar.gz' --dir dist
+
+      - name: Compute checksums
+        run: |
+          SHA256_ARM64=$(sha256sum "dist/velar-darwin-arm64-${VERSION}.tar.gz" | cut -d' ' -f1)
+          SHA256_X86_64=$(sha256sum "dist/velar-darwin-x86_64-${VERSION}.tar.gz" | cut -d' ' -f1)
+          {
+            echo "SHA256_ARM64=$SHA256_ARM64"
+            echo "SHA256_X86_64=$SHA256_X86_64"
+          } >> "$GITHUB_ENV"
+
+      - name: Checkout tap repository
+        uses: actions/checkout@v4
+        with:
+          repository: dmitrybondarchuk/homebrew-velar
+          token: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+          path: tap
+
+      - name: Update tap formula
+        run: |
+          python3 scripts/update-homebrew-formula.py \
+            --version "$VERSION" \
+            --sha256-arm64 "$SHA256_ARM64" \
+            --sha256-x86_64 "$SHA256_X86_64" \
+            --formula tap/Formula/velar.rb
+
+      - name: Create pull request in tap
+        id: cpr
+        uses: peter-evans/create-pull-request@v6
+        with:
+          token: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+          path: tap
+          branch: chore/update-velar-${{ env.VERSION }}
+          commit-message: "chore: update velar formula to ${{ env.VERSION }}"
+          title: "chore: update Velar to ${{ env.VERSION }}"
+          body: |
+            Automated Homebrew formula update for ${{ env.VERSION }}.
+
+            - arm64 sha256: `${{ env.SHA256_ARM64 }}`
+            - x86_64 sha256: `${{ env.SHA256_X86_64 }}`
+          labels: |
+            automated
+            homebrew
+          delete-branch: true
+          draft: false
+
+      - name: Enable PR auto-merge
+        if: ${{ steps.cpr.outputs.pull-request-number != '' }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+        run: gh pr merge --repo dmitrybondarchuk/homebrew-velar --auto --squash "${{ steps.cpr.outputs.pull-request-number }}"

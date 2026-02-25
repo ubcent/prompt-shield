@@ -4,7 +4,7 @@ on:
   workflow_run:
     workflows: ["Go"]
     types: [completed]
-    branches: [ "main" ]
+    branches: ["main"]
   push:
     tags:
       - 'v*'
@@ -16,68 +16,65 @@ jobs:
     permissions:
       contents: write
     steps:
-    - name: Checkout code
-      uses: actions/checkout@v4
-      with:
-        fetch-depth: 0
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
-    - name: Set up Go
-      uses: actions/setup-go@v4
-      with:
-        go-version: '1.22'
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.22'
 
-    - name: Generate version
-      id: version
-      run: |
-        if [[ "${{ github.ref }}" == refs/tags/v* ]]; then
-          VERSION=${GITHUB_REF#refs/tags/}
-        else
-          VERSION=v$(date +%Y.%m.%d)-$(git rev-parse --short HEAD)
-        fi
-        echo "version=$VERSION" >> $GITHUB_OUTPUT
+      - name: Generate version
+        id: version
+        run: |
+          if [[ "${{ github.ref }}" == refs/tags/v* ]]; then
+            VERSION=${GITHUB_REF#refs/tags/}
+          else
+            VERSION=v$(date +%Y.%m.%d)-$(git rev-parse --short HEAD)
+          fi
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
 
-    - name: Build binaries
-      run: |
-        mkdir -p dist
+      - name: Build linux binaries
+        run: |
+          mkdir -p dist
+          CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build \
+            -ldflags="-X main.Version=${{ steps.version.outputs.version }}" \
+            -o dist/velar-linux-amd64 \
+            ./cmd/velar
+          CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build \
+            -ldflags="-X main.Version=${{ steps.version.outputs.version }}" \
+            -o dist/velard-linux-amd64 \
+            ./cmd/velard
 
-        CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build \
-          -ldflags="-X main.Version=${{ steps.version.outputs.version }}" \
-          -o dist/velar-linux-amd64 \
-          ./cmd/velar
+      - name: Build darwin arm64 package
+        run: ./scripts/build-darwin.sh arm64 "${{ steps.version.outputs.version }}"
 
-        CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build \
-          -ldflags="-X main.Version=${{ steps.version.outputs.version }}" \
-          -o dist/velard-linux-amd64 \
-          ./cmd/velard
+      - name: Build darwin x86_64 package
+        run: ./scripts/build-darwin.sh x86_64 "${{ steps.version.outputs.version }}"
 
-        CGO_ENABLED=0 GOOS=darwin GOARCH=amd64 go build \
-          -ldflags="-X main.Version=${{ steps.version.outputs.version }}" \
-          -o dist/velar-darwin-amd64 \
-          ./cmd/velar
+      - name: Generate release checksums
+        run: |
+          ./scripts/checksum.sh "${{ steps.version.outputs.version }}" | tee dist/darwin-checksums.env
 
-        CGO_ENABLED=0 GOOS=darwin GOARCH=amd64 go build \
-          -ldflags="-X main.Version=${{ steps.version.outputs.version }}" \
-          -o dist/velard-darwin-amd64 \
-          ./cmd/velard
+      - name: Create Release from tag
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            dist/velar-linux-amd64
+            dist/velard-linux-amd64
+            dist/velar-darwin-arm64-${{ steps.version.outputs.version }}.tar.gz
+            dist/velar-darwin-x86_64-${{ steps.version.outputs.version }}.tar.gz
+            dist/darwin-checksums.env
+          generate_release_notes: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-    - name: Create Release from tag
-      if: startsWith(github.ref, 'refs/tags/v')
-      uses: softprops/action-gh-release@v1
-      with:
-        files: dist/*
-        generate_release_notes: true
-      env:
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-
-    - name: Upload artifacts
-      if: "!startsWith(github.ref, 'refs/tags/v') && github.event_name != 'workflow_run'"
-      uses: actions/upload-artifact@v4
-      with:
-        name: binaries-${{ steps.version.outputs.version }}
-        path: dist/
-
-
-
-
-
+      - name: Upload artifacts
+        if: "!startsWith(github.ref, 'refs/tags/v') && github.event_name != 'workflow_run'"
+        uses: actions/upload-artifact@v4
+        with:
+          name: binaries-${{ steps.version.outputs.version }}
+          path: dist/
