@@ -70,6 +70,37 @@ func TestModelVerifyDetectsInvalid(t *testing.T) {
 	}
 }
 
+func TestModelVerifyDetectsInvalidTokenizer(t *testing.T) {
+	reg := models.Registry{Models: []models.ModelSpec{{Name: "ner_en", Checksum: "sha256:x"}}}
+	root := t.TempDir()
+	dir := filepath.Join(root, "ner_en")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	_ = os.WriteFile(filepath.Join(dir, "model.onnx"), []byte("x"), 0o644)
+	_ = os.WriteFile(filepath.Join(dir, "labels.json"), []byte("{\"0\":\"O\"}"), 0o644)
+	_ = os.WriteFile(filepath.Join(dir, "tokenizer.json"), []byte("not-json"), 0o644)
+
+	old := os.Stdout
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	os.Stdout = w
+	verifyErr := modelVerify(reg, root)
+	_ = w.Close()
+	os.Stdout = old
+	if verifyErr == nil {
+		t.Fatal("expected verification error")
+	}
+	var b bytes.Buffer
+	_, _ = b.ReadFrom(r)
+	out := b.String()
+	if !strings.Contains(out, "tokenizer.json") {
+		t.Fatalf("expected tokenizer error in output: %s", out)
+	}
+}
+
 func captureStdout(t *testing.T, fn func()) string {
 	t.Helper()
 	old := os.Stdout

@@ -3,6 +3,7 @@ package main
 import (
 	"bufio"
 	"context"
+	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
@@ -156,6 +157,9 @@ func modelDownload(registry models.Registry, root string, args []string) error {
 }
 
 func validateModelLoads(modelDir string) error {
+	if err := validateModelMetadata(modelDir); err != nil {
+		return err
+	}
 	d := detect.NewONNXNERDetector(detect.ONNXNERConfig{ModelDir: modelDir})
 	_, err := d.Detect(context.Background(), "John Doe emailed jane@example.com")
 	if err != nil && !errors.Is(err, detect.ErrNERUnavailable) {
@@ -163,6 +167,35 @@ func validateModelLoads(modelDir string) error {
 	}
 	if errors.Is(err, detect.ErrNERUnavailable) {
 		return fmt.Errorf("model files present but detector initialization failed")
+	}
+	return nil
+}
+
+func validateModelMetadata(modelDir string) error {
+	labelsPath := filepath.Join(modelDir, "labels.json")
+	labelsRaw, err := os.ReadFile(labelsPath)
+	if err != nil {
+		return fmt.Errorf("read labels.json: %w", err)
+	}
+	var labels map[string]string
+	if err := json.Unmarshal(labelsRaw, &labels); err != nil {
+		return fmt.Errorf("parse labels.json: %w", err)
+	}
+	if len(labels) == 0 {
+		return fmt.Errorf("labels.json is empty")
+	}
+
+	tokenizerPath := filepath.Join(modelDir, "tokenizer.json")
+	tokenizerRaw, err := os.ReadFile(tokenizerPath)
+	if err != nil {
+		return fmt.Errorf("read tokenizer.json: %w", err)
+	}
+	var tokenizerPayload map[string]any
+	if err := json.Unmarshal(tokenizerRaw, &tokenizerPayload); err != nil {
+		return fmt.Errorf("parse tokenizer.json: %w", err)
+	}
+	if len(tokenizerPayload) == 0 {
+		return fmt.Errorf("tokenizer.json is empty")
 	}
 	return nil
 }
