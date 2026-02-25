@@ -188,6 +188,10 @@ func stopDaemon() error {
 	pid, err := readPID()
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
+			// PID file doesn't exist, try to find velard process by name
+			if foundPid := findVelardProcess(); foundPid > 0 {
+				return killProcess(foundPid)
+			}
 			fmt.Println("Velar not running")
 			return nil
 		}
@@ -200,6 +204,10 @@ func stopDaemon() error {
 		return nil
 	}
 
+	return killProcess(pid)
+}
+
+func killProcess(pid int) error {
 	proc, err := os.FindProcess(pid)
 	if err != nil {
 		return err
@@ -227,6 +235,31 @@ func stopDaemon() error {
 	}
 	fmt.Printf("Velar stopped (pid=%d)\n", pid)
 	return nil
+}
+
+func findVelardProcess() int {
+	if runtime.GOOS != "darwin" && runtime.GOOS != "linux" {
+		return 0
+	}
+
+	cmd := exec.Command("pgrep", "-f", "velard")
+	output, err := cmd.Output()
+	if err != nil {
+		return 0
+	}
+
+	pidStr := strings.TrimSpace(string(output))
+	lines := strings.Split(pidStr, "\n")
+	if len(lines) == 0 {
+		return 0
+	}
+
+	// Return the first velard process found
+	pid, err := strconv.Atoi(lines[0])
+	if err != nil || pid <= 0 {
+		return 0
+	}
+	return pid
 }
 
 func restartDaemon() error {
@@ -395,13 +428,24 @@ func proxyCommand(args []string) error {
 }
 
 func daemonCommand() (*exec.Cmd, error) {
+	// Try to find velard in PATH
 	if path, err := exec.LookPath("velard"); err == nil {
 		return exec.Command(path), nil
 	}
+
+	// Try to find velard in ./bin directory
+	binPath := filepath.Join(".", "bin", "velard")
+	if _, err := os.Stat(binPath); err == nil {
+		return exec.Command(binPath), nil
+	}
+
+	// Try to find velard in current directory
 	if _, err := os.Stat(filepath.Join(".", "velard")); err == nil {
 		return exec.Command("./velard"), nil
 	}
-	return exec.Command("go", "run", "./cmd/velard"), nil
+
+	// Last resort - build it on the fly
+	return nil, fmt.Errorf("velard binary not found. Please run 'make build' or 'go build -o bin/velard ./cmd/velard' first")
 }
 
 func isDaemonRunning() bool {

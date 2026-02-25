@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
@@ -49,12 +50,16 @@ func run() error {
 	cls := classifier.HostClassifier{}
 	addr := fmt.Sprintf("0.0.0.0:%d", cfg.Port)
 	server := proxy.New(addr, engine, cls, auditLogger, cfg.MITM, cfg.Sanitizer, cfg.Notifications)
-	statsServer := newStatsServer(cfg, startedAt)
+
+	statsServer, statsListener, err := newStatsServer(cfg, startedAt)
+	if err != nil {
+		return err
+	}
 
 	errCh := make(chan error, 2)
 	go func() { errCh <- server.Start() }()
 	go func() {
-		err := statsServer.ListenAndServe()
+		err := statsServer.Serve(statsListener)
 		if err != nil && !errors.Is(err, http.ErrServerClosed) {
 			errCh <- err
 		}
@@ -80,7 +85,7 @@ func run() error {
 	}
 }
 
-func newStatsServer(cfg config.Config, startedAt time.Time) *http.Server {
+func newStatsServer(cfg config.Config, startedAt time.Time) (*http.Server, net.Listener, error) {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/api/stats", func(w http.ResponseWriter, r *http.Request) {
 		entries, err := audit.ParseFile(cfg.LogFile)
@@ -97,5 +102,23 @@ func newStatsServer(cfg config.Config, startedAt time.Time) *http.Server {
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(st)
 	})
-	return &http.Server{Addr: "127.0.0.1:8081", Handler: mux}
+
+	// Create listener with SO_REUSEADDR
+	lc := net.ListenConfig{
+		Control: func(network, address string, c syscall.RawConn) error {
+			var err error
+			c.Control(func(fd uintptr) {
+				err = syscall.SetsockoptInt(int(fd), syscall.SOL_SOCKET, syscall.SO_REUSEADDR, 1)
+			})
+			return err
+		},
+	}
+
+	listener, err := lc.Listen(context.Background(), "tcp", "127.0.0.1:8081")
+	if err != nil {
+		return nil, nil, err
+	}
+
+	server := &http.Server{Handler: mux}
+	return server, listener, nil
 }
