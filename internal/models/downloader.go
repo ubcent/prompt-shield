@@ -85,44 +85,28 @@ func (d *Downloader) DownloadAndInstall(ctx context.Context, model ModelSpec, mo
 		}
 
 		// Download tokenizer.json
-		if model.TokenizerURL != "" {
-			tokPath := filepath.Join(extractDir, "tokenizer.json")
-			if err := d.downloadWithRetry(ctx, model.TokenizerURL, tokPath, nil); err != nil {
-				return fmt.Errorf("download tokenizer: %w", err)
-			}
-		} else {
-			// Fallback to embedded assets
-			_, tokenizer, ok := EmbeddedAuxFiles(model.Name)
-			if !ok {
-				return fmt.Errorf("tokenizer_url missing and no embedded assets for model %q", model.Name)
-			}
-			if err := os.WriteFile(filepath.Join(extractDir, "tokenizer.json"), tokenizer, 0o644); err != nil {
-				return err
-			}
+		if model.TokenizerURL == "" {
+			return fmt.Errorf("tokenizer_url required for ONNX model %q", model.Name)
+		}
+		tokPath := filepath.Join(extractDir, "tokenizer.json")
+		if err := d.downloadWithRetry(ctx, model.TokenizerURL, tokPath, nil); err != nil {
+			return fmt.Errorf("download tokenizer: %w", err)
 		}
 
 		// Download and convert config.json to labels.json
-		if model.ConfigURL != "" {
-			configPath := filepath.Join(tmpDir, "config.json")
-			if err := d.downloadWithRetry(ctx, model.ConfigURL, configPath, nil); err != nil {
-				return fmt.Errorf("download config: %w", err)
-			}
-			labelsData, err := extractLabelsFromConfig(configPath)
-			if err != nil {
-				return fmt.Errorf("extract labels from config: %w", err)
-			}
-			if err := os.WriteFile(filepath.Join(extractDir, "labels.json"), labelsData, 0o644); err != nil {
-				return err
-			}
-		} else {
-			// Fallback to embedded assets
-			labels, _, ok := EmbeddedAuxFiles(model.Name)
-			if !ok {
-				return fmt.Errorf("config_url missing and no embedded assets for model %q", model.Name)
-			}
-			if err := os.WriteFile(filepath.Join(extractDir, "labels.json"), labels, 0o644); err != nil {
-				return err
-			}
+		if model.ConfigURL == "" {
+			return fmt.Errorf("config_url required for ONNX model %q", model.Name)
+		}
+		configPath := filepath.Join(tmpDir, "config.json")
+		if err := d.downloadWithRetry(ctx, model.ConfigURL, configPath, nil); err != nil {
+			return fmt.Errorf("download config: %w", err)
+		}
+		labelsData, err := extractLabelsFromConfig(configPath)
+		if err != nil {
+			return fmt.Errorf("extract labels from config: %w", err)
+		}
+		if err := os.WriteFile(filepath.Join(extractDir, "labels.json"), labelsData, 0o644); err != nil {
+			return err
 		}
 	}
 

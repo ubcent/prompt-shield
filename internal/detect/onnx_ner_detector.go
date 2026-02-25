@@ -54,17 +54,18 @@ func (d *ONNXNERDetector) init() error {
 		labelsPath := filepath.Join(d.cfg.ModelDir, "labels.json")
 		tokenizerPath := filepath.Join(d.cfg.ModelDir, "tokenizer.json")
 		if _, err := os.Stat(modelPath); err != nil {
-			d.loadErr = fmt.Errorf("model missing: %w", err)
+			// Allow heuristic-only detection when model assets are absent.
+			d.tokenizer = NewSimpleTokenizer(tokenizerPath)
 			return
 		}
 		labelsRaw, err := os.ReadFile(labelsPath)
 		if err != nil {
-			d.loadErr = fmt.Errorf("labels missing: %w", err)
+			d.tokenizer = NewSimpleTokenizer(tokenizerPath)
 			return
 		}
 		var labels map[string]string
 		if err := json.Unmarshal(labelsRaw, &labels); err != nil {
-			d.loadErr = fmt.Errorf("parse labels: %w", err)
+			d.tokenizer = NewSimpleTokenizer(tokenizerPath)
 			return
 		}
 		d.labels = map[int]string{}

@@ -1,4 +1,0 @@
-{
-  "type": "whitespace",
-  "description": "Placeholder tokenizer configuration. The current SimpleTokenizer ignores this file and uses simple whitespace tokenization. This file is reserved for future tokenizer configuration."
-}
