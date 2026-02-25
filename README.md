@@ -166,6 +166,28 @@ rules:
 ```
 
 
+
+## CLI Model Management
+
+Velar ships model-management commands for local ONNX NER models stored in `~/.velar/models/`.
+
+- `velar model list`: shows available registry models and whether each is installed.
+- `velar model info <name>`: prints version, capabilities, source URL, and license.
+- Default English model source is now Hugging Face `dslim/bert-base-NER`.
+- `velar model download <name>`: downloads and installs a specific model with progress, checksum verification, extraction, and load validation.
+- `velar model download --all`: installs all recommended models in the registry.
+- `velar model verify`: checks installed model files and loadability.
+- `velar model remove <name>`: interactively removes an installed model.
+
+After installation, enable ONNX NER in `config.yaml`:
+
+```yaml
+sanitizer:
+  detectors:
+    onnx_ner:
+      enabled: true
+```
+
 ## CLI Stats
 
 Use `velar stats` to view proxy activity from the terminal without opening a UI.

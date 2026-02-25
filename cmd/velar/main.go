@@ -54,6 +54,8 @@ func main() {
 		err = ca(flag.Args()[1:])
 	case "proxy":
 		err = proxyCommand(flag.Args()[1:])
+	case "model":
+		err = modelCommand(flag.Args()[1:])
 	case "daemon":
 		err = runDaemon()
 	default:
@@ -67,7 +69,7 @@ func main() {
 }
 
 func usage() {
-	fmt.Println("Usage: velar [start|stop|restart|status|logs|stats|ca init|ca print|proxy on|proxy off|proxy status]")
+	fmt.Println("Usage: velar [start|stop|restart|status|logs|stats|model list|model download <name>|model info <name>|model remove <name>|model verify|ca init|ca print|proxy on|proxy off|proxy status]")
 }
 
 func loadConfig() (config.Config, error) {

@@ -29,12 +29,23 @@ type ONNXNERDetector struct {
 
 func NewONNXNERDetector(cfg ONNXNERConfig) *ONNXNERDetector {
 	if cfg.ModelDir == "" {
-		cfg.ModelDir = filepath.Join("internal", "models", "ner_en")
+		cfg.ModelDir = defaultNERModelDir()
 	}
 	if cfg.MaxBytes == 0 {
 		cfg.MaxBytes = 32 * 1024
 	}
 	return &ONNXNERDetector{cfg: cfg}
+}
+
+func defaultNERModelDir() string {
+	home, err := os.UserHomeDir()
+	if err == nil {
+		preferred := filepath.Join(home, ".velar", "models", "ner_en")
+		if _, statErr := os.Stat(filepath.Join(preferred, "model.onnx")); statErr == nil {
+			return preferred
+		}
+	}
+	return filepath.Join("internal", "models", "ner_en")
 }
 
 func (d *ONNXNERDetector) init() error {
