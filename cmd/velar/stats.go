@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
+	"io"
 	"net/http"
 	"os"
 	"os/signal"
@@ -19,7 +20,7 @@ import (
 
 const statsAPIURL = "http://127.0.0.1:8081/api/stats"
 
-var renderStatsFunc = renderStats
+var renderStatsTextFunc = renderStatsText
 
 func statsCommand(args []string) error {
 	fs := flag.NewFlagSet("stats", flag.ContinueOnError)
@@ -42,15 +43,23 @@ func watchStats(recent bool, export string) error {
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, os.Interrupt, syscall.SIGTERM)
 	defer signal.Stop(sigCh)
+	if export == "" && isTerminal() {
+		hideCursor()
+		defer showCursor()
+	}
 	return watchStatsLoop(recent, export, ticker.C, sigCh)
 }
 
 func watchStatsLoop(recent bool, export string, ticks <-chan time.Time, stop <-chan os.Signal) error {
 	for {
-		if err := renderStatsFunc(recent, export); err != nil {
+		out, err := renderStatsTextFunc(recent, export)
+		if err != nil {
 			return err
 		}
-		fmt.Print("\033[H\033[2J")
+		if export == "" && isTerminal() {
+			clearScreen()
+		}
+		fmt.Fprint(os.Stdout, out)
 		select {
 		case <-ticks:
 		case <-stop:
@@ -59,7 +68,19 @@ func watchStatsLoop(recent bool, export string, ticks <-chan time.Time, stop <-c
 	}
 }
 
+func renderStatsText(recent bool, export string) (string, error) {
+	var buf strings.Builder
+	if err := renderStatsTo(&buf, recent, export); err != nil {
+		return "", err
+	}
+	return buf.String(), nil
+}
+
 func renderStats(recent bool, export string) error {
+	return renderStatsTo(os.Stdout, recent, export)
+}
+
+func renderStatsTo(w io.Writer, recent bool, export string) error {
 	st, err := getStats()
 	if err != nil {
 		return err
@@ -67,23 +88,43 @@ func renderStats(recent bool, export string) error {
 	switch strings.ToLower(export) {
 	case "":
 		if recent {
-			printRecent(st)
+			printRecent(w, st)
 			return nil
 		}
-		printSummary(st)
+		printSummary(w, st)
 		return nil
 	case "json":
-		enc := json.NewEncoder(os.Stdout)
+		enc := json.NewEncoder(w)
 		enc.SetIndent("", "  ")
 		return enc.Encode(st)
 	case "csv":
 		if !recent {
 			return fmt.Errorf("csv export requires --recent")
 		}
-		return exportRecentCSV(st.Recent)
+		return exportRecentCSV(w, st.Recent)
 	default:
 		return fmt.Errorf("unsupported export format %q", export)
 	}
+}
+
+func clearScreen() {
+	fmt.Fprint(os.Stdout, "\033[H\033[2J\033[3J")
+}
+
+func hideCursor() {
+	fmt.Fprint(os.Stdout, "\033[?25l")
+}
+
+func showCursor() {
+	fmt.Fprint(os.Stdout, "\033[?25h")
+}
+
+func isTerminal() bool {
+	info, err := os.Stdout.Stat()
+	if err != nil {
+		return false
+	}
+	return (info.Mode() & os.ModeCharDevice) != 0
 }
 
 func getStats() (stats.Stats, error) {
@@ -124,17 +165,17 @@ func fetchDaemonStats() (stats.Stats, error) {
 	return st, nil
 }
 
-func printSummary(st stats.Stats) {
-	fmt.Println("Velar Statistics")
-	fmt.Println(strings.Repeat("-", 40))
-	fmt.Printf("Status:      %s\n", st.Status)
-	fmt.Printf("Uptime:      %s\n", time.Duration(st.UptimeSeconds)*time.Second)
-	fmt.Printf("Port:        %d\n", st.Port)
-	fmt.Printf("Requests:    %d (%.1f/min last 5m)\n", st.Requests.Total, st.Requests.PerMinute)
-	fmt.Printf("Latency avg: sanitize %.1fms | upstream %.1fms | total %.1fms\n", st.Latency.SanitizeMs, st.Latency.UpstreamMs, st.Latency.TotalMs)
-	fmt.Println()
-	fmt.Println("Masked Items")
-	fmt.Println(strings.Repeat("-", 40))
+func printSummary(w io.Writer, st stats.Stats) {
+	fmt.Fprintln(w, "Velar Statistics")
+	fmt.Fprintln(w, strings.Repeat("-", 40))
+	fmt.Fprintf(w, "Status:      %s\n", st.Status)
+	fmt.Fprintf(w, "Uptime:      %s\n", time.Duration(st.UptimeSeconds)*time.Second)
+	fmt.Fprintf(w, "Port:        %d\n", st.Port)
+	fmt.Fprintf(w, "Requests:    %d (%.1f/min last 5m)\n", st.Requests.Total, st.Requests.PerMinute)
+	fmt.Fprintf(w, "Latency avg: sanitize %.1fms | upstream %.1fms | total %.1fms\n", st.Latency.SanitizeMs, st.Latency.UpstreamMs, st.Latency.TotalMs)
+	fmt.Fprintln(w)
+	fmt.Fprintln(w, "Masked Items")
+	fmt.Fprintln(w, strings.Repeat("-", 40))
 	types := make([]string, 0, len(st.MaskedItems.ByType))
 	for k := range st.MaskedItems.ByType {
 		types = append(types, k)
@@ -142,31 +183,31 @@ func printSummary(st stats.Stats) {
 	sort.Strings(types)
 	for _, t := range types {
 		v := st.MaskedItems.ByType[t]
-		fmt.Printf("%-12s %5d %s\n", t+":", v, progress(v, st.MaskedItems.Total))
+		fmt.Fprintf(w, "%-12s %5d %s\n", t+":", v, progress(v, st.MaskedItems.Total))
 	}
-	fmt.Printf("Total:       %d\n\n", st.MaskedItems.Total)
+	fmt.Fprintf(w, "Total:       %d\n\n", st.MaskedItems.Total)
 
-	fmt.Println("Top Domains")
-	fmt.Println(strings.Repeat("-", 40))
+	fmt.Fprintln(w, "Top Domains")
+	fmt.Fprintln(w, strings.Repeat("-", 40))
 	for _, d := range st.TopDomains {
-		fmt.Printf("%-24s %d\n", d.Domain, d.Requests)
+		fmt.Fprintf(w, "%-24s %d\n", d.Domain, d.Requests)
 	}
 }
 
-func printRecent(st stats.Stats) {
-	fmt.Println("Recent Requests (last 20)")
-	fmt.Println(strings.Repeat("-", 90))
-	fmt.Printf("%-10s %-24s %-6s %-6s %-20s %-8s\n", "TIME", "DOMAIN", "METHOD", "STATUS", "MASKED", "LATENCY")
-	fmt.Println(strings.Repeat("-", 90))
+func printRecent(w io.Writer, st stats.Stats) {
+	fmt.Fprintln(w, "Recent Requests (last 20)")
+	fmt.Fprintln(w, strings.Repeat("-", 90))
+	fmt.Fprintf(w, "%-10s %-24s %-6s %-6s %-20s %-8s\n", "TIME", "DOMAIN", "METHOD", "STATUS", "MASKED", "LATENCY")
+	fmt.Fprintln(w, strings.Repeat("-", 90))
 	for _, r := range st.Recent {
 		tm := r.Timestamp
 		if ts, err := time.Parse(time.RFC3339Nano, r.Timestamp); err == nil {
 			tm = ts.Format("15:04:05")
 		}
-		fmt.Printf("%-10s %-24s %-6s %-6d %-20s %-8.1fms\n", tm, r.Domain, r.Method, r.StatusCode, maskedLabel(r.MaskedBy), r.TotalMs)
+		fmt.Fprintf(w, "%-10s %-24s %-6s %-6d %-20s %-8.1fms\n", tm, r.Domain, r.Method, r.StatusCode, maskedLabel(r.MaskedBy), r.TotalMs)
 	}
-	fmt.Println(strings.Repeat("-", 90))
-	fmt.Printf("Showing %d of %d total requests\n", len(st.Recent), st.Requests.Total)
+	fmt.Fprintln(w, strings.Repeat("-", 90))
+	fmt.Fprintf(w, "Showing %d of %d total requests\n", len(st.Recent), st.Requests.Total)
 }
 
 func progress(v, total int) string {
@@ -192,10 +233,10 @@ func maskedLabel(masked map[string]int) string {
 	return strings.Join(parts, ", ")
 }
 
-func exportRecentCSV(rows []stats.RecentRequest) error {
-	w := csv.NewWriter(os.Stdout)
-	defer w.Flush()
-	if err := w.Write([]string{"timestamp", "domain", "method", "status", "masked_types", "masked_count", "latency_ms"}); err != nil {
+func exportRecentCSV(w io.Writer, rows []stats.RecentRequest) error {
+	cw := csv.NewWriter(w)
+	defer cw.Flush()
+	if err := cw.Write([]string{"timestamp", "domain", "method", "status", "masked_types", "masked_count", "latency_ms"}); err != nil {
 		return err
 	}
 	for _, r := range rows {
@@ -204,7 +245,7 @@ func exportRecentCSV(rows []stats.RecentRequest) error {
 			types = append(types, t)
 		}
 		sort.Strings(types)
-		if err := w.Write([]string{
+		if err := cw.Write([]string{
 			r.Timestamp,
 			r.Domain,
 			r.Method,
@@ -216,5 +257,5 @@ func exportRecentCSV(rows []stats.RecentRequest) error {
 			return err
 		}
 	}
-	return w.Error()
+	return cw.Error()
 }
