@@ -2,6 +2,7 @@ package detect
 
 import (
 	"context"
+	"log"
 	"sort"
 	"strings"
 	"time"
@@ -13,6 +14,12 @@ type HybridConfig struct {
 	MaxBytes   int
 	Timeout    time.Duration
 	MinScore   float64
+}
+
+type NERStatus struct {
+	Enabled   bool
+	Available bool
+	LastError error
 }
 
 type HybridDetector struct {
@@ -45,10 +52,18 @@ func (h HybridDetector) Detect(ctx context.Context, text string) ([]Entity, erro
 						all = append(all, e)
 					}
 				}
+			} else if err == context.DeadlineExceeded {
+				log.Printf("[velar] onnx-ner: inference timeout after %s, falling back", h.Config.Timeout)
+			} else {
+				log.Printf("[velar] onnx-ner: inference error: %v, falling back", err)
 			}
 		}
 	}
 	return mergeEntities(all), nil
+}
+
+func (h HybridDetector) NERStatus() NERStatus {
+	return NERStatus{Enabled: h.Config.NerEnabled, Available: h.Config.NerEnabled && h.Ner != nil}
 }
 
 func shouldRunNER(text string) bool {
