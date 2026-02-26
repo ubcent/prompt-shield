@@ -34,6 +34,10 @@ type proxyHarness struct {
 
 func setupTestProxy(t *testing.T, cfg config.Config) *proxyHarness {
 	t.Helper()
+	// Keep integration tests non-interactive and deterministic.
+	// Notifications are a runtime UX feature and can produce OS popups during tests.
+	cfg.Notifications.Enabled = false
+
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatalf("listen temp addr: %v", err)
