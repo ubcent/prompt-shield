@@ -168,15 +168,6 @@ func shouldRunNER(text string) bool {
 	return (letters/total) > 0.4 && (spaces/total) > 0.05
 }
 
-func containsByte(s string, b byte) bool {
-	for i := 0; i < len(s); i++ {
-		if s[i] == b {
-			return true
-		}
-	}
-	return false
-}
-
 func checkPythonDeps() {
 	cmd := "python3 -c \"import onnxruntime, numpy; print('OK')\""
 	result := runCommand(cmd)

@@ -18,11 +18,6 @@ type SimpleTokenizer struct {
 	_ string
 }
 
-func NewSimpleTokenizer(path string) *SimpleTokenizer {
-	_, _ = os.Stat(path)
-	return &SimpleTokenizer{}
-}
-
 func (t *SimpleTokenizer) Tokenize(text string) ([]Token, error) {
 	return splitWordsWithOffsets(text), nil
 }

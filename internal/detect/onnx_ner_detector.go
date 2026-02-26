@@ -9,7 +9,6 @@ import (
 	"math"
 	"os"
 	"path/filepath"
-	"sort"
 	"strconv"
 	"sync"
 )
@@ -226,13 +225,4 @@ func softmax(logits []float32) []float64 {
 		probs[i] /= sum
 	}
 	return probs
-}
-
-func labelKeys(m map[int]string) []int {
-	keys := make([]int, 0, len(m))
-	for k := range m {
-		keys = append(keys, k)
-	}
-	sort.Ints(keys)
-	return keys
 }
