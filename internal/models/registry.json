@@ -14,11 +14,8 @@
       "entity_types": [
         "PERSON",
         "ORG",
-        "GPE",
-        "EMAIL",
-        "PHONE",
-        "CREDIT_CARD",
-        "SSN"
+        "LOC",
+        "MISC"
       ],
       "description": "dslim/bert-base-NER model for English PII detection (Hugging Face)",
       "architecture": "BERT-base (dslim/bert-base-NER)",
