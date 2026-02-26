@@ -144,6 +144,6 @@ Velar supports the following environment overrides:
 
 - `VELAR_PORT`
 - `VELAR_LOG_FILE`
+- `PYTHON_BIN` (path to the Python interpreter used for ONNX NER)
 
 Legacy variables are still accepted for migration (`PROMPTSHIELD_PORT`, `PROMPTSHIELD_LOG_FILE`), but Velar prints a deprecation warning and prefers `VELAR_*` when both are set.
-

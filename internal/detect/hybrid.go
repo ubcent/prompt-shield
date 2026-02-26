@@ -4,7 +4,6 @@ import (
 	"context"
 	"log"
 	"sort"
-	"strings"
 	"time"
 	"unicode"
 )
@@ -47,15 +46,22 @@ func (h HybridDetector) Detect(ctx context.Context, text string) ([]Entity, erro
 			entities, err := h.Ner.Detect(nerCtx, text)
 			cancel()
 			if err == nil {
+				filteredCount := 0
 				for _, e := range entities {
 					if e.Score >= h.Config.MinScore {
 						all = append(all, e)
+						filteredCount++
 					}
 				}
+				if len(entities) > 0 && filteredCount == 0 {
+					log.Printf("[velar] onnx-ner: detected %d entities but all filtered out by min_score=%.2f (consider lowering threshold)", len(entities), h.Config.MinScore)
+				}
+			} else if err == ErrNERUnavailable {
+				// Don't log every time - init already logged the issue
 			} else if err == context.DeadlineExceeded {
-				log.Printf("[velar] onnx-ner: inference timeout after %s, falling back", h.Config.Timeout)
+				log.Printf("[velar] onnx-ner: inference timeout after %s, falling back to regex-only", h.Config.Timeout)
 			} else {
-				log.Printf("[velar] onnx-ner: inference error: %v, falling back", err)
+				log.Printf("[velar] onnx-ner: inference error: %v, falling back to regex-only", err)
 			}
 		}
 	}
@@ -85,7 +91,9 @@ func shouldRunNER(text string) bool {
 	if total == 0 {
 		return false
 	}
-	return (letters/total) > 0.4 && (spaces/total) > 0.1 && strings.ContainsAny(text, ".,;:?!")
+	// Text should look like natural language: enough letters and spaces.
+	// Punctuation is NOT required — user messages and chat prompts often omit it.
+	return (letters/total) > 0.4 && (spaces/total) > 0.05
 }
 
 func mergeEntities(all []Entity) []Entity {

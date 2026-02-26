@@ -75,7 +75,7 @@ func Default() Config {
 		Sanitizer: Sanitizer{
 			Types:            []string{"email", "phone", "api_key", "jwt", "aws_access_key", "aws_secret_key", "aws_session_token", "gcp_api_key", "gcp_service_account", "azure_connection_string", "azure_sas_token", "private_key", "db_url", "high_entropy", "hex_secret"},
 			RestoreResponses: true,
-			Detectors:        Detectors{ONNXNER: ONNXNER{Enabled: false, MaxBytes: 32 * 1024, TimeoutMS: 40, MinScore: 0.70}},
+			Detectors:        Detectors{ONNXNER: ONNXNER{Enabled: false, MaxBytes: 32 * 1024, TimeoutMS: 5000, MinScore: 0.70}},
 		},
 		Notifications: Notifications{Enabled: true},
 		Rules: []Rule{{

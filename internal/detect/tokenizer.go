@@ -34,6 +34,7 @@ type WordPieceTokenizer struct {
 	sepID      int
 	maxWordLen int
 	maxSeqLen  int
+	lowercase  bool
 }
 
 type TokenizerOutput struct {
@@ -48,10 +49,13 @@ type tokenizerJSON struct {
 	Model struct {
 		Vocab map[string]int `json:"vocab"`
 	} `json:"model"`
+	Normalizer struct {
+		Lowercase *bool `json:"lowercase"`
+	} `json:"normalizer"`
 }
 
 func NewWordPieceTokenizer(tokenizerPath string) (*WordPieceTokenizer, error) {
-	vocab, err := loadVocabFromTokenizerJSON(tokenizerPath)
+	vocab, lowercase, err := loadTokenizerConfig(tokenizerPath)
 	if err != nil {
 		return nil, err
 	}
@@ -67,22 +71,26 @@ func NewWordPieceTokenizer(tokenizerPath string) (*WordPieceTokenizer, error) {
 	if !ok {
 		return nil, fmt.Errorf("tokenizer vocab is missing [SEP]")
 	}
-	return &WordPieceTokenizer{vocab: vocab, unkID: unkID, clsID: clsID, sepID: sepID, maxWordLen: 100, maxSeqLen: 512}, nil
+	return &WordPieceTokenizer{vocab: vocab, unkID: unkID, clsID: clsID, sepID: sepID, maxWordLen: 100, maxSeqLen: 512, lowercase: lowercase}, nil
 }
 
-func loadVocabFromTokenizerJSON(path string) (map[string]int, error) {
+func loadTokenizerConfig(path string) (map[string]int, bool, error) {
 	raw, err := os.ReadFile(path)
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
 	var cfg tokenizerJSON
 	if err := json.Unmarshal(raw, &cfg); err != nil {
-		return nil, err
+		return nil, false, err
 	}
 	if len(cfg.Model.Vocab) == 0 {
-		return nil, fmt.Errorf("tokenizer.json model.vocab is empty")
+		return nil, false, fmt.Errorf("tokenizer.json model.vocab is empty")
 	}
-	return cfg.Model.Vocab, nil
+	lowercase := true
+	if cfg.Normalizer.Lowercase != nil {
+		lowercase = *cfg.Normalizer.Lowercase
+	}
+	return cfg.Model.Vocab, lowercase, nil
 }
 
 func (t *WordPieceTokenizer) Encode(text string) (*TokenizerOutput, error) {
@@ -120,7 +128,11 @@ func (t *WordPieceTokenizer) wordToPieces(word string) []int {
 	if word == "" {
 		return []int{t.unkID}
 	}
-	runes := []rune(strings.ToLower(word))
+	normalized := word
+	if t.lowercase {
+		normalized = strings.ToLower(word)
+	}
+	runes := []rune(normalized)
 	if len(runes) > t.maxWordLen {
 		return []int{t.unkID}
 	}

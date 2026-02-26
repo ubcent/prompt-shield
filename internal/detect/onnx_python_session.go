@@ -5,8 +5,64 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log"
+	"os"
 	"os/exec"
+	"path/filepath"
+	"sync"
 )
+
+var (
+	pythonBinOnce   sync.Once
+	pythonBinCached string
+)
+
+// resolvePythonBin finds a Python interpreter that has numpy and onnxruntime.
+// Priority: $PYTHON_BIN env → .venv/bin/python (relative to cwd) →
+// ~/.velar/venv/bin/python → python3 on PATH.
+func resolvePythonBin() string {
+	pythonBinOnce.Do(func() {
+		if v := os.Getenv("PYTHON_BIN"); v != "" {
+			pythonBinCached = v
+			log.Printf("[velar] onnx-ner: using PYTHON_BIN=%s", v)
+			return
+		}
+
+		candidates := []string{}
+
+		// .venv relative to working directory
+		candidates = append(candidates, filepath.Join(".venv", "bin", "python"))
+
+		// ~/.velar/venv
+		if home, err := os.UserHomeDir(); err == nil {
+			candidates = append(candidates, filepath.Join(home, ".velar", "venv", "bin", "python"))
+		}
+
+		// system python3
+		candidates = append(candidates, "python3")
+
+		for _, c := range candidates {
+			if pythonHasDeps(c) {
+				pythonBinCached = c
+				log.Printf("[velar] onnx-ner: resolved python: %s", c)
+				return
+			}
+		}
+
+		// last resort fallback
+		pythonBinCached = "python3"
+		log.Printf("[velar] onnx-ner: WARNING: no python with numpy+onnxruntime found, falling back to python3")
+	})
+	return pythonBinCached
+}
+
+// pythonHasDeps quickly checks whether the given python binary can import numpy and onnxruntime.
+func pythonHasDeps(bin string) bool {
+	cmd := exec.Command(bin, "-c", "import numpy, onnxruntime")
+	cmd.Stdout = nil
+	cmd.Stderr = nil
+	return cmd.Run() == nil
+}
 
 type pythonONNXSession struct {
 	modelPath string
@@ -39,22 +95,29 @@ func (s *pythonONNXSession) Run(ctx context.Context, inputIDs, attentionMask, to
 		return nil, err
 	}
 
-	cmd := exec.CommandContext(ctx, "python3", "-c", pythonONNXInferScript)
+	cmd := exec.CommandContext(ctx, resolvePythonBin(), "-c", pythonONNXInferScript)
 	cmd.Stdin = bytes.NewReader(payload)
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
 	if err := cmd.Run(); err != nil {
+		errMsg := ""
 		if stderr.Len() > 0 {
-			return nil, fmt.Errorf("python onnx inference failed: %v: %s", err, stderr.String())
+			errMsg = stderr.String()
 		}
-		return nil, fmt.Errorf("python onnx inference failed: %w", err)
+		if ctx.Err() == context.DeadlineExceeded {
+			return nil, fmt.Errorf("python onnx inference timeout (python may be hanging during import): %w", ctx.Err())
+		}
+		if errMsg != "" {
+			return nil, fmt.Errorf("python onnx inference failed: %v: %s", err, errMsg)
+		}
+		return nil, fmt.Errorf("python onnx inference failed: %w (hint: ensure 'pip3 install onnxruntime numpy' is run)", err)
 	}
 
 	resp := pythonInferResponse{}
 	if err := json.Unmarshal(stdout.Bytes(), &resp); err != nil {
-		return nil, fmt.Errorf("parse python onnx output: %w", err)
+		return nil, fmt.Errorf("parse python onnx output: %w (stdout: %s)", err, stdout.String())
 	}
 	if resp.Error != "" {
 		return nil, fmt.Errorf("python onnx inference error: %s", resp.Error)

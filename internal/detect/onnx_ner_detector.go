@@ -61,30 +61,48 @@ func (d *ONNXNERDetector) init() error {
 		modelPath := filepath.Join(d.cfg.ModelDir, "model.onnx")
 		labelsPath := filepath.Join(d.cfg.ModelDir, "labels.json")
 		tokenizerPath := filepath.Join(d.cfg.ModelDir, "tokenizer.json")
+
+		log.Printf("[velar] onnx-ner: initializing detector from %s", d.cfg.ModelDir)
+
 		if _, err := os.Stat(modelPath); err != nil {
 			d.loadErr = fmt.Errorf("%w: model not found at %s", ErrNERUnavailable, modelPath)
-			log.Printf("[velar] onnx-ner: model not found, falling back to regex-only detection")
+			log.Printf("[velar] onnx-ner: error: model.onnx not found at %s", modelPath)
+			log.Printf("[velar] onnx-ner: run 'velar model download ner_en' to install the model")
+			log.Printf("[velar] onnx-ner: falling back to regex-only detection")
 			return
 		}
+
 		labels, err := loadLabels(labelsPath)
 		if err != nil {
 			d.loadErr = fmt.Errorf("load labels: %w", err)
+			log.Printf("[velar] onnx-ner: error: failed to load labels from %s: %v", labelsPath, err)
 			return
 		}
 		d.labels = labels
+		log.Printf("[velar] onnx-ner: loaded %d label mappings", len(labels))
+
 		tok, err := NewWordPieceTokenizer(tokenizerPath)
 		if err != nil {
 			d.loadErr = fmt.Errorf("load tokenizer: %w", err)
+			log.Printf("[velar] onnx-ner: error: failed to load tokenizer from %s: %v", tokenizerPath, err)
 			return
 		}
 		d.tokenizer = tok
+		log.Printf("[velar] onnx-ner: tokenizer initialized")
+
+		log.Printf("[velar] onnx-ner: creating ONNX inference session (this may take a few seconds)...")
 		session, err := createONNXSession(modelPath)
 		if err != nil {
 			d.loadErr = fmt.Errorf("create onnx session: %w", err)
+			log.Printf("[velar] onnx-ner: error: failed to create ONNX session: %v", err)
+			log.Printf("[velar] onnx-ner: this usually means Python onnxruntime is not installed")
+			log.Printf("[velar] onnx-ner: install with: pip3 install onnxruntime numpy")
+			log.Printf("[velar] onnx-ner: see docs/onnx-ner-troubleshooting.md for more help")
 			return
 		}
 		d.session = session
-		log.Printf("[velar] onnx-ner: model loaded from %s (labels: %d)", d.cfg.ModelDir, len(d.labels))
+		log.Printf("[velar] onnx-ner: model successfully loaded from %s (labels: %d)", d.cfg.ModelDir, len(d.labels))
+		log.Printf("[velar] onnx-ner: ONNX NER detector ready for inference")
 	})
 	return d.loadErr
 }

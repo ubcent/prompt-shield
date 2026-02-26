@@ -67,9 +67,39 @@ func New(addr string, p policy.Engine, c classifier.Classifier, a audit.Logger, 
 		s := sanitizer.New(detectors).WithConfidenceThreshold(sanitizerCfg.ConfidenceThreshold).WithMaxReplacements(sanitizerCfg.MaxReplacements)
 		fast := []detect.Detector{detect.RegexDetector{}}
 		onnxCfg := sanitizerCfg.Detectors.ONNXNER
+		onnxDetector := detect.NewONNXNERDetector(detect.ONNXNERConfig{MaxBytes: onnxCfg.MaxBytes})
+
+		// Perform health check on ONNX NER if enabled
+		if onnxCfg.Enabled {
+			log.Printf("proxy: ONNX NER is enabled, performing health check...")
+			testCtx, testCancel := context.WithTimeout(context.Background(), 5*time.Second)
+			testText := "Test detection for John Smith"
+			_, testErr := onnxDetector.Detect(testCtx, testText)
+			testCancel()
+
+			if testErr != nil {
+				if errors.Is(testErr, detect.ErrNERUnavailable) {
+					log.Printf("proxy: warning: ONNX NER unavailable - model not loaded (see messages above)")
+					log.Printf("proxy: warning: only regex-based detection (email, phone, API keys) will work")
+					log.Printf("proxy: warning: person names and organizations will NOT be detected")
+				} else if testErr == context.DeadlineExceeded {
+					log.Printf("proxy: warning: ONNX NER health check timed out after 5s")
+					log.Printf("proxy: warning: Python onnxruntime may be hanging on import")
+					log.Printf("proxy: warning: check: python3 -c 'import onnxruntime'")
+				} else {
+					log.Printf("proxy: warning: ONNX NER health check failed: %v", testErr)
+				}
+				log.Printf("proxy: see docs/onnx-ner-troubleshooting.md for help")
+			} else {
+				log.Printf("proxy: ONNX NER health check passed - detector is working")
+			}
+		} else {
+			log.Printf("proxy: ONNX NER is disabled in configuration")
+		}
+
 		hybrid := detect.HybridDetector{
 			Fast:   fast,
-			Ner:    detect.NewONNXNERDetector(detect.ONNXNERConfig{MaxBytes: onnxCfg.MaxBytes}),
+			Ner:    onnxDetector,
 			Config: detect.HybridConfig{NerEnabled: onnxCfg.Enabled, MaxBytes: onnxCfg.MaxBytes, Timeout: time.Duration(onnxCfg.TimeoutMS) * time.Millisecond, MinScore: onnxCfg.MinScore},
 		}
 		inspector = sanitizer.NewSanitizingInspector(s).WithHybridDetector(hybrid).WithNotifications(notificationCfg.Enabled).WithRestoreResponses(sanitizerCfg.RestoreResponses)
