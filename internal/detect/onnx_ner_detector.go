@@ -109,10 +109,6 @@ func loadLabels(path string) (map[int]string, error) {
 	return labels, nil
 }
 
-func createONNXSession(_ string) (nerSession, error) {
-	return nil, fmt.Errorf("onnx runtime backend is not wired in this build")
-}
-
 func (d *ONNXNERDetector) Detect(ctx context.Context, text string) ([]Entity, error) {
 	if len(text) == 0 || len(text) > d.cfg.MaxBytes {
 		return nil, nil
