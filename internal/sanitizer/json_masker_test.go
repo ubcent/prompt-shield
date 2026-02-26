@@ -2,6 +2,7 @@ package sanitizer
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	"velar/internal/detect"
@@ -34,5 +35,48 @@ func TestSanitizeJSONFieldsWithNER(t *testing.T) {
 	}
 	if len(items) != 3 {
 		t.Fatalf("expected 3 items, got %d", len(items))
+	}
+}
+
+func TestSanitizeJSONFields_InterestingAndUninterestingKeys(t *testing.T) {
+	h := detect.HybridDetector{Fast: []detect.Detector{detect.RegexDetector{}}, Config: detect.HybridConfig{NerEnabled: false}}
+	input := []byte(`{"content":"contact alice@example.com","metadata":"alice@example.com"}`)
+	out, items, err := sanitizeJSONFields(context.Background(), input, h, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := string(out)
+	if !strings.Contains(got, `"content":"contact [EMAIL_1]"`) {
+		t.Fatalf("expected content key to be sanitized, got %s", got)
+	}
+	if !strings.Contains(got, `"metadata":"alice@example.com"`) {
+		t.Fatalf("expected metadata key to remain untouched, got %s", got)
+	}
+	if len(items) != 1 {
+		t.Fatalf("expected one sanitized item, got %+v", items)
+	}
+}
+
+func TestSanitizeJSONFields_NestedContent(t *testing.T) {
+	h := detect.HybridDetector{Fast: []detect.Detector{detect.RegexDetector{}}, Config: detect.HybridConfig{NerEnabled: false}}
+	input := []byte(`{"messages":[{"role":"user","content":"alice@example.com"}]}`)
+	out, items, err := sanitizeJSONFields(context.Background(), input, h, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(out), `"content":"[EMAIL_1]"`) {
+		t.Fatalf("expected nested content to be sanitized, got %s", string(out))
+	}
+	if len(items) != 1 {
+		t.Fatalf("expected one item, got %+v", items)
+	}
+}
+
+func TestSanitizeJSONFields_NonJSONBody(t *testing.T) {
+	h := detect.HybridDetector{Fast: []detect.Detector{detect.RegexDetector{}}, Config: detect.HybridConfig{NerEnabled: false}}
+	input := []byte("plain text with alice@example.com")
+	out, items, err := sanitizeJSONFields(context.Background(), input, h, 0)
+	if err == nil {
+		t.Fatalf("expected JSON parse error, got out=%q items=%+v", string(out), items)
 	}
 }

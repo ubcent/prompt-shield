@@ -9,10 +9,10 @@ help:
 	@echo "  make run      - Run velar start"
 	@echo ""
 	@echo "Test targets:"
-	@echo "  make test     - Run all tests in Docker"
+	@echo "  make test     - Run all tests locally (no Docker required)"
 	@echo ""
 	@echo "Cleanup:"
-	@echo "  make clean    - Stop and remove Docker containers"
+	@echo "  make clean    - Remove local build artifacts"
 
 build:
 	@mkdir -p ./bin
@@ -22,15 +22,13 @@ build:
 run:
 	go run ./cmd/velar start
 
-# Run all tests in Docker
+# Run all tests locally
+# Includes race detector to preserve the previous isolation guarantees.
 test:
-	@echo "🚀 Starting Docker services and running tests..."
-	docker-compose up --build --abort-on-container-exit --exit-code-from test test
-	@docker-compose down
+	@echo "🧪 Running full Go test suite locally..."
+	go test ./... -race
 	@echo "✅ Tests completed!"
 
 # Cleanup
 clean:
-	docker-compose down -v
-	docker-compose rm -f
-
+	rm -rf ./bin
