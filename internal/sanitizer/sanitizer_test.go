@@ -154,3 +154,98 @@ func TestSanitizerReplacesDatabaseURL(t *testing.T) {
 		t.Fatalf("unexpected items: %+v", items)
 	}
 }
+
+type stubDetector struct {
+	name    string
+	matches []Match
+}
+
+func (d stubDetector) Name() string { return d.name }
+func (d stubDetector) Detect(string) []Match {
+	return append([]Match(nil), d.matches...)
+}
+
+func TestSanitize_EmptyString(t *testing.T) {
+	s := New([]Detector{EmailDetector{}})
+	masked, items := s.Sanitize("")
+	if masked != "" || items != nil {
+		t.Fatalf("expected empty passthrough, got masked=%q items=%v", masked, items)
+	}
+}
+
+func TestSanitize_EmptyInput_NilSanitizer(t *testing.T) {
+	var s *Sanitizer
+	masked, items := s.Sanitize("alice@example.com")
+	if masked != "alice@example.com" || items != nil {
+		t.Fatalf("expected nil sanitizer passthrough, got masked=%q items=%v", masked, items)
+	}
+}
+
+func TestSanitize_MaxReplacements(t *testing.T) {
+	s := New([]Detector{EmailDetector{}}).WithMaxReplacements(1)
+	masked, items := s.Sanitize("alice@example.com and bob@example.com")
+	if masked != "[EMAIL_1] and bob@example.com" {
+		t.Fatalf("unexpected masked output: %q", masked)
+	}
+	if len(items) != 1 || items[0].Original != "alice@example.com" {
+		t.Fatalf("unexpected items: %+v", items)
+	}
+}
+
+func TestSanitize_ConfidenceThreshold(t *testing.T) {
+	s := New([]Detector{stubDetector{name: "email", matches: []Match{{Type: "email", Value: "alice@example.com", Start: 0, End: 17, Confidence: 0.5}}}}).WithConfidenceThreshold(0.9)
+	masked, items := s.Sanitize("alice@example.com")
+	if masked != "alice@example.com" || items != nil {
+		t.Fatalf("expected low-confidence match ignored, got masked=%q items=%+v", masked, items)
+	}
+}
+
+func TestSanitize_OverlappingMatches(t *testing.T) {
+	input := "alice@example.com"
+	s := New([]Detector{stubDetector{name: "email", matches: []Match{
+		{Type: "email", Value: "alice@example.com", Start: 0, End: len(input), Confidence: 0.9},
+		{Type: "email", Value: "alice", Start: 0, End: 5, Confidence: 0.9},
+	}}})
+	masked, items := s.Sanitize(input)
+	if masked != "[EMAIL_1]" {
+		t.Fatalf("expected longer overlap preserved, got %q", masked)
+	}
+	if len(items) != 1 {
+		t.Fatalf("expected one item, got %+v", items)
+	}
+}
+
+func TestSanitize_InvalidMatchBounds(t *testing.T) {
+	s := New([]Detector{stubDetector{name: "email", matches: []Match{
+		{Type: "email", Value: "alice@example.com", Start: -1, End: 17, Confidence: 1},
+		{Type: "email", Value: "alice@example.com", Start: 0, End: 200, Confidence: 1},
+	}}})
+	masked, items := s.Sanitize("alice@example.com")
+	if masked != "alice@example.com" || items != nil {
+		t.Fatalf("invalid bounds should be ignored, got masked=%q items=%+v", masked, items)
+	}
+}
+
+func TestSanitize_PlaceholderNaming(t *testing.T) {
+	s := New([]Detector{EmailDetector{}})
+	masked, items := s.Sanitize("a@example.com b@example.com c@example.com")
+	if masked != "[EMAIL_1] [EMAIL_2] [EMAIL_3]" {
+		t.Fatalf("unexpected placeholder sequence: %q", masked)
+	}
+	if len(items) != 3 {
+		t.Fatalf("expected 3 items, got %+v", items)
+	}
+}
+
+func TestRestore_PlaceholderNotInText(t *testing.T) {
+	got := Restore("hello world", []SanitizedItem{{Placeholder: "[EMAIL_1]", Original: "alice@example.com"}})
+	if got != "hello world" {
+		t.Fatalf("unexpected restore mutation: %q", got)
+	}
+}
+
+func TestRestore_NilItems(t *testing.T) {
+	if got := Restore("hello", nil); got != "hello" {
+		t.Fatalf("expected passthrough restore, got %q", got)
+	}
+}
