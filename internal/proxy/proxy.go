@@ -102,7 +102,8 @@ func New(addr string, p policy.Engine, c classifier.Classifier, a audit.Logger, 
 			Ner:    onnxDetector,
 			Config: detect.HybridConfig{NerEnabled: onnxCfg.Enabled, MaxBytes: onnxCfg.MaxBytes, Timeout: time.Duration(onnxCfg.TimeoutMS) * time.Millisecond, MinScore: onnxCfg.MinScore},
 		}
-		inspector = sanitizer.NewSanitizingInspector(s).WithHybridDetector(hybrid).WithNotifications(notificationCfg.Enabled).WithRestoreResponses(sanitizerCfg.RestoreResponses)
+		kc := sanitizer.NewKeyConfig(sanitizerCfg.SanitizeKeys, sanitizerCfg.SkipKeys)
+		inspector = sanitizer.NewSanitizingInspector(s).WithHybridDetector(hybrid).WithKeyConfig(kc).WithNotifications(notificationCfg.Enabled).WithRestoreResponses(sanitizerCfg.RestoreResponses)
 	}
 	pr.inspector = inspector
 

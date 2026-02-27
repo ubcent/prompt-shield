@@ -54,3 +54,43 @@ func TestParseYAMLLiteONNXNERConfig(t *testing.T) {
 		t.Fatalf("unexpected onnx_ner config: %+v", ner)
 	}
 }
+
+func TestParseYAMLLiteSanitizeKeysAndSkipKeys(t *testing.T) {
+	cfg := Default()
+	err := parseYAMLLite(strings.NewReader(`sanitizer:
+  enabled: true
+  sanitize_keys:
+    - content
+    - prompt
+    - custom_field
+  skip_keys:
+    - token
+    - access_token
+    - session_id
+`), &cfg)
+	if err != nil {
+		t.Fatalf("parseYAMLLite() error = %v", err)
+	}
+	if len(cfg.Sanitizer.SanitizeKeys) != 3 {
+		t.Fatalf("expected 3 sanitize_keys, got %v", cfg.Sanitizer.SanitizeKeys)
+	}
+	if cfg.Sanitizer.SanitizeKeys[0] != "content" || cfg.Sanitizer.SanitizeKeys[2] != "custom_field" {
+		t.Fatalf("unexpected sanitize_keys: %v", cfg.Sanitizer.SanitizeKeys)
+	}
+	if len(cfg.Sanitizer.SkipKeys) != 3 {
+		t.Fatalf("expected 3 skip_keys, got %v", cfg.Sanitizer.SkipKeys)
+	}
+	if cfg.Sanitizer.SkipKeys[0] != "token" || cfg.Sanitizer.SkipKeys[2] != "session_id" {
+		t.Fatalf("unexpected skip_keys: %v", cfg.Sanitizer.SkipKeys)
+	}
+}
+
+func TestDefaultConfigHasSanitizeKeysAndSkipKeys(t *testing.T) {
+	cfg := Default()
+	if len(cfg.Sanitizer.SanitizeKeys) == 0 {
+		t.Fatal("expected default sanitize_keys to be non-empty")
+	}
+	if len(cfg.Sanitizer.SkipKeys) == 0 {
+		t.Fatal("expected default skip_keys to be non-empty")
+	}
+}

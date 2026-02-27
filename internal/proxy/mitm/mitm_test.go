@@ -202,7 +202,7 @@ func TestSanitizerRestoresResponseBody(t *testing.T) {
 	inspector.WithSessions(h.sessions)
 
 	originalEmail := "dvbondarchuk@gmail.com"
-	originalBody := `{"email":"` + originalEmail + `"}`
+	originalBody := `{"content":"` + originalEmail + `"}`
 
 	req := httptest.NewRequest(http.MethodPost, "https://proxy/", bytes.NewBufferString(originalBody))
 	req.Header.Set("Content-Type", "application/json")

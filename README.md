@@ -150,6 +150,21 @@ sanitizer:
   confidence_threshold: 0.8
   max_replacements: 10
   restore_responses: true  # Restore masked values in responses (default: true)
+  sanitize_keys:           # JSON field names to inspect for sensitive data (default: prompt, input, content, text, message, parts)
+    - prompt
+    - input
+    - content
+    - text
+    - message
+    - parts
+  skip_keys:               # JSON field names to never mask — protects auth/service fields (default: authorization, access_token, token, model, role, id, etc.)
+    - authorization
+    - access_token
+    - session_token
+    - token
+    - model
+    - role
+    - id
 notifications:
   enabled: true
 rules:

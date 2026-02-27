@@ -49,9 +49,11 @@ func (s *Sanitizer) WithMaxReplacements(v int) *Sanitizer {
 	return s
 }
 
-func (s *Sanitizer) Sanitize(input string) (string, []SanitizedItem) {
+// collectMatches gathers, sorts, and deduplicates matches from all detectors.
+// Returns the chosen non-overlapping matches and the raw match list.
+func (s *Sanitizer) collectMatches(input string) ([]Match, []Match) {
 	if s == nil || len(s.detectors) == 0 || input == "" {
-		return input, nil
+		return nil, nil
 	}
 
 	all := make([]Match, 0)
@@ -67,7 +69,7 @@ func (s *Sanitizer) Sanitize(input string) (string, []SanitizedItem) {
 		}
 	}
 	if len(all) == 0 {
-		return input, nil
+		return nil, all
 	}
 
 	sort.SliceStable(all, func(i, j int) bool {
@@ -77,11 +79,7 @@ func (s *Sanitizer) Sanitize(input string) (string, []SanitizedItem) {
 		return all[i].Start < all[j].Start
 	})
 
-	typeCounters := map[string]int{}
-	placeholdersByValue := map[string]string{}
-	itemsByPlaceholder := map[string]SanitizedItem{}
 	chosen := make([]Match, 0, len(all))
-
 	lastEnd := -1
 	for _, m := range all {
 		if m.Start < lastEnd {
@@ -90,6 +88,22 @@ func (s *Sanitizer) Sanitize(input string) (string, []SanitizedItem) {
 		lastEnd = m.End
 		chosen = append(chosen, m)
 	}
+	return chosen, all
+}
+
+func (s *Sanitizer) Sanitize(input string) (string, []SanitizedItem) {
+	if s == nil || len(s.detectors) == 0 || input == "" {
+		return input, nil
+	}
+
+	chosen, _ := s.collectMatches(input)
+	if len(chosen) == 0 {
+		return input, nil
+	}
+
+	typeCounters := map[string]int{}
+	placeholdersByValue := map[string]string{}
+	itemsByPlaceholder := map[string]SanitizedItem{}
 
 	var out strings.Builder
 	cursor := 0

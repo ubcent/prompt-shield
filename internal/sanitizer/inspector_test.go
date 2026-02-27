@@ -12,7 +12,7 @@ func TestSanitizingInspectorInspectRequestSanitizesAndRestoresBody(t *testing.T)
 	s := New([]Detector{EmailDetector{}})
 	inspector := NewSanitizingInspector(s)
 
-	req, err := http.NewRequest(http.MethodPost, "https://example.com/v1/chat/completions", strings.NewReader(`{"email":"john@example.com"}`))
+	req, err := http.NewRequest(http.MethodPost, "https://example.com/v1/chat/completions", strings.NewReader(`{"content":"john@example.com"}`))
 	if err != nil {
 		t.Fatalf("new request: %v", err)
 	}
@@ -125,7 +125,7 @@ func TestSanitizingInspectorInspectResponseRestoresOriginalValues(t *testing.T) 
 	s := New([]Detector{EmailDetector{}})
 	inspector := NewSanitizingInspector(s)
 
-	req, _ := http.NewRequest(http.MethodPost, "https://example.com/v1/chat/completions", strings.NewReader(`{"email":"john@example.com"}`))
+	req, _ := http.NewRequest(http.MethodPost, "https://example.com/v1/chat/completions", strings.NewReader(`{"content":"john@example.com"}`))
 	req.Header.Set("Content-Type", "application/json")
 
 	sanitizedReq, err := inspector.InspectRequest(req)
@@ -156,7 +156,7 @@ func TestSanitizingInspectorInspectResponseSkipsNonTextContent(t *testing.T) {
 	s := New([]Detector{EmailDetector{}})
 	inspector := NewSanitizingInspector(s)
 
-	req, _ := http.NewRequest(http.MethodPost, "https://example.com/upload", strings.NewReader(`{"email":"john@example.com"}`))
+	req, _ := http.NewRequest(http.MethodPost, "https://example.com/upload", strings.NewReader(`{"content":"john@example.com"}`))
 	req.Header.Set("Content-Type", "application/json")
 	sanitizedReq, _ := inspector.InspectRequest(req)
 

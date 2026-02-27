@@ -49,6 +49,8 @@ type Sanitizer struct {
 	ConfidenceThreshold float64   `json:"confidence_threshold"`
 	MaxReplacements     int       `json:"max_replacements"`
 	RestoreResponses    bool      `json:"restore_responses"`
+	SanitizeKeys        []string  `json:"sanitize_keys"`
+	SkipKeys            []string  `json:"skip_keys"`
 	Detectors           Detectors `json:"detectors"`
 }
 
@@ -75,6 +77,8 @@ func Default() Config {
 		Sanitizer: Sanitizer{
 			Types:            []string{"email", "phone", "api_key", "jwt", "aws_access_key", "aws_secret_key", "aws_session_token", "gcp_api_key", "gcp_service_account", "azure_connection_string", "azure_sas_token", "private_key", "db_url", "high_entropy", "hex_secret"},
 			RestoreResponses: true,
+			SanitizeKeys:     []string{"prompt", "input", "content", "text", "message", "parts"},
+			SkipKeys:         []string{"authorization", "access_token", "session_token", "token", "bearer", "id_token", "refresh_token", "api_key", "apikey", "x-api-key", "cookie", "set-cookie", "model", "role", "type", "id", "object", "created", "system_fingerprint"},
 			Detectors:        Detectors{ONNXNER: ONNXNER{Enabled: false, MaxBytes: 32 * 1024, TimeoutMS: 5000, MinScore: 0.70}},
 		},
 		Notifications: Notifications{Enabled: true},
@@ -223,6 +227,8 @@ func parseYAMLLite(r *strings.Reader, cfg *Config) error {
 	inMITMDomains := false
 	inSanitizer := false
 	inSanitizerTypes := false
+	inSanitizeKeys := false
+	inSkipKeys := false
 	inNotifications := false
 	inDetectors := false
 	inONNXNER := false
@@ -244,6 +250,8 @@ func parseYAMLLite(r *strings.Reader, cfg *Config) error {
 			}
 			inSanitizer = false
 			inSanitizerTypes = false
+			inSanitizeKeys = false
+			inSkipKeys = false
 			inMITMDomains = false
 			inMITM = false
 			inNotifications = false
@@ -251,6 +259,8 @@ func parseYAMLLite(r *strings.Reader, cfg *Config) error {
 		case line == "mitm:":
 			inSanitizer = false
 			inSanitizerTypes = false
+			inSanitizeKeys = false
+			inSkipKeys = false
 			inMITM = true
 			inMITMDomains = false
 			inNotifications = false
@@ -260,6 +270,8 @@ func parseYAMLLite(r *strings.Reader, cfg *Config) error {
 			inMITMDomains = false
 			inSanitizer = true
 			inSanitizerTypes = false
+			inSanitizeKeys = false
+			inSkipKeys = false
 			inNotifications = false
 			continue
 		case line == "notifications:":
@@ -267,6 +279,8 @@ func parseYAMLLite(r *strings.Reader, cfg *Config) error {
 			inMITMDomains = false
 			inSanitizer = false
 			inSanitizerTypes = false
+			inSanitizeKeys = false
+			inSkipKeys = false
 			inNotifications = true
 			continue
 		case line == "detectors:" && inSanitizer:
@@ -282,6 +296,20 @@ func parseYAMLLite(r *strings.Reader, cfg *Config) error {
 		case line == "types:" && inSanitizer:
 			cfg.Sanitizer.Types = nil
 			inSanitizerTypes = true
+			inSanitizeKeys = false
+			inSkipKeys = false
+			continue
+		case line == "sanitize_keys:" && inSanitizer:
+			cfg.Sanitizer.SanitizeKeys = nil
+			inSanitizeKeys = true
+			inSanitizerTypes = false
+			inSkipKeys = false
+			continue
+		case line == "skip_keys:" && inSanitizer:
+			cfg.Sanitizer.SkipKeys = nil
+			inSkipKeys = true
+			inSanitizerTypes = false
+			inSanitizeKeys = false
 			continue
 		case inMITMDomains && strings.HasPrefix(strings.TrimSpace(s.Text()), "-"):
 			domain := strings.TrimSpace(strings.TrimLeft(strings.TrimSpace(s.Text()), "-"))
@@ -295,9 +323,23 @@ func parseYAMLLite(r *strings.Reader, cfg *Config) error {
 				cfg.Sanitizer.Types = append(cfg.Sanitizer.Types, typ)
 			}
 			continue
+		case inSanitizeKeys && strings.HasPrefix(strings.TrimSpace(s.Text()), "-"):
+			k := strings.TrimSpace(strings.TrimLeft(strings.TrimSpace(s.Text()), "-"))
+			if k != "" {
+				cfg.Sanitizer.SanitizeKeys = append(cfg.Sanitizer.SanitizeKeys, k)
+			}
+			continue
+		case inSkipKeys && strings.HasPrefix(strings.TrimSpace(s.Text()), "-"):
+			k := strings.TrimSpace(strings.TrimLeft(strings.TrimSpace(s.Text()), "-"))
+			if k != "" {
+				cfg.Sanitizer.SkipKeys = append(cfg.Sanitizer.SkipKeys, k)
+			}
+			continue
 		case strings.HasPrefix(line, "port:"):
 			inMITMDomains = false
 			inSanitizerTypes = false
+			inSanitizeKeys = false
+			inSkipKeys = false
 			v := strings.TrimSpace(strings.TrimPrefix(line, "port:"))
 			port, err := strconv.Atoi(v)
 			if err != nil {
@@ -307,6 +349,8 @@ func parseYAMLLite(r *strings.Reader, cfg *Config) error {
 		case strings.HasPrefix(line, "log_file:"):
 			inMITMDomains = false
 			inSanitizerTypes = false
+			inSanitizeKeys = false
+			inSkipKeys = false
 			cfg.LogFile = strings.TrimSpace(strings.TrimPrefix(line, "log_file:"))
 		case strings.HasPrefix(line, "enabled:") && inMITM:
 			inMITMDomains = false

@@ -32,6 +32,7 @@ type AuditMetadata struct {
 type SanitizingInspector struct {
 	sanitizer            *Sanitizer
 	hybridDetector       detect.Detector
+	keyConfig            KeyConfig
 	maxBodySize          int64
 	notificationsEnabled bool
 	restoreResponses     bool
@@ -41,6 +42,7 @@ type SanitizingInspector struct {
 func NewSanitizingInspector(s *Sanitizer) *SanitizingInspector {
 	return &SanitizingInspector{
 		sanitizer:        s,
+		keyConfig:        DefaultKeyConfig(),
 		maxBodySize:      defaultMaxBodyBytes,
 		restoreResponses: true, // Default to enabled
 		sessions:         session.NewStore(),
@@ -66,6 +68,11 @@ func (i *SanitizingInspector) WithSessions(store *session.Store) *SanitizingInsp
 	if store != nil {
 		i.sessions = store
 	}
+	return i
+}
+
+func (i *SanitizingInspector) WithKeyConfig(kc KeyConfig) *SanitizingInspector {
+	i.keyConfig = kc
 	return i
 }
 
@@ -164,16 +171,25 @@ func (i *SanitizingInspector) InspectRequest(r *http.Request) (*http.Request, er
 	newBody := body
 	var items []SanitizedItem
 	if i.hybridDetector != nil {
-		sanitizedJSON, jsonItems, err := sanitizeJSONFields(r.Context(), body, i.hybridDetector, i.sanitizer.maxReplacements)
+		sanitizedJSON, jsonItems, err := sanitizeJSONFields(r.Context(), body, i.hybridDetector, i.sanitizer.maxReplacements, i.keyConfig)
 		if err == nil {
 			newBody = sanitizedJSON
 			items = jsonItems
 		}
 	}
 	if len(items) == 0 {
-		sanitized, fallbackItems := i.sanitizer.Sanitize(string(body))
-		newBody = []byte(sanitized)
-		items = fallbackItems
+		// JSON-aware fallback: only sanitize values under configured content keys,
+		// skipping auth/service fields to avoid breaking API authentication.
+		sanitizedJSON, fallbackItems, err := sanitizeJSONFieldsWithSanitizer(body, i.sanitizer, i.keyConfig)
+		if err == nil {
+			newBody = sanitizedJSON
+			items = fallbackItems
+		} else {
+			// Non-JSON body: fall back to full-text sanitization
+			sanitized, textItems := i.sanitizer.Sanitize(string(body))
+			newBody = []byte(sanitized)
+			items = textItems
+		}
 	}
 	restoreBody(r, newBody)
 	if len(items) > 0 {

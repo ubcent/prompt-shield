@@ -24,7 +24,7 @@ func (fakeNER) Detect(_ context.Context, text string) ([]detect.Entity, error) {
 func TestSanitizeJSONFieldsWithNER(t *testing.T) {
 	h := detect.HybridDetector{Fast: []detect.Detector{detect.RegexDetector{}}, Ner: fakeNER{}, Config: detect.HybridConfig{NerEnabled: true, MinScore: 0.7}}
 	input := []byte(`{"prompt":"My name is John Smith and I work at Acme Corp in Amsterdam."}`)
-	out, items, err := sanitizeJSONFields(context.Background(), input, h, 10)
+	out, items, err := sanitizeJSONFields(context.Background(), input, h, 10, DefaultKeyConfig())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -41,7 +41,7 @@ func TestSanitizeJSONFieldsWithNER(t *testing.T) {
 func TestSanitizeJSONFields_InterestingAndUninterestingKeys(t *testing.T) {
 	h := detect.HybridDetector{Fast: []detect.Detector{detect.RegexDetector{}}, Config: detect.HybridConfig{NerEnabled: false}}
 	input := []byte(`{"content":"contact alice@example.com","metadata":"alice@example.com"}`)
-	out, items, err := sanitizeJSONFields(context.Background(), input, h, 0)
+	out, items, err := sanitizeJSONFields(context.Background(), input, h, 0, DefaultKeyConfig())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -60,7 +60,7 @@ func TestSanitizeJSONFields_InterestingAndUninterestingKeys(t *testing.T) {
 func TestSanitizeJSONFields_NestedContent(t *testing.T) {
 	h := detect.HybridDetector{Fast: []detect.Detector{detect.RegexDetector{}}, Config: detect.HybridConfig{NerEnabled: false}}
 	input := []byte(`{"messages":[{"role":"user","content":"alice@example.com"}]}`)
-	out, items, err := sanitizeJSONFields(context.Background(), input, h, 0)
+	out, items, err := sanitizeJSONFields(context.Background(), input, h, 0, DefaultKeyConfig())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -75,8 +75,82 @@ func TestSanitizeJSONFields_NestedContent(t *testing.T) {
 func TestSanitizeJSONFields_NonJSONBody(t *testing.T) {
 	h := detect.HybridDetector{Fast: []detect.Detector{detect.RegexDetector{}}, Config: detect.HybridConfig{NerEnabled: false}}
 	input := []byte("plain text with alice@example.com")
-	out, items, err := sanitizeJSONFields(context.Background(), input, h, 0)
+	out, items, err := sanitizeJSONFields(context.Background(), input, h, 0, DefaultKeyConfig())
 	if err == nil {
 		t.Fatalf("expected JSON parse error, got out=%q items=%+v", string(out), items)
+	}
+}
+
+func TestSanitizeJSONFields_SkipKeysProtectsAuthFields(t *testing.T) {
+	h := detect.HybridDetector{Fast: []detect.Detector{detect.RegexDetector{}}, Config: detect.HybridConfig{NerEnabled: false}}
+	// "access_token" is in DefaultSkipKeys, so even if it contains a secret-like value, it must not be masked
+	input := []byte(`{"content":"alice@example.com","access_token":"sk-Abcdefghij1234567890XYZ","model":"gpt-4"}`)
+	out, items, err := sanitizeJSONFields(context.Background(), input, h, 0, DefaultKeyConfig())
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := string(out)
+	if !strings.Contains(got, `"content":"[EMAIL_1]"`) {
+		t.Fatalf("expected content to be sanitized, got %s", got)
+	}
+	if !strings.Contains(got, `"access_token":"sk-Abcdefghij1234567890XYZ"`) {
+		t.Fatalf("expected access_token to remain untouched, got %s", got)
+	}
+	if !strings.Contains(got, `"model":"gpt-4"`) {
+		t.Fatalf("expected model to remain untouched, got %s", got)
+	}
+	if len(items) != 1 {
+		t.Fatalf("expected one sanitized item, got %+v", items)
+	}
+}
+
+func TestSanitizeJSONFields_CustomKeyConfig(t *testing.T) {
+	h := detect.HybridDetector{Fast: []detect.Detector{detect.RegexDetector{}}, Config: detect.HybridConfig{NerEnabled: false}}
+	kc := NewKeyConfig([]string{"custom_field"}, []string{"content"})
+	input := []byte(`{"content":"alice@example.com","custom_field":"bob@example.com"}`)
+	out, items, err := sanitizeJSONFields(context.Background(), input, h, 0, kc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := string(out)
+	if !strings.Contains(got, `"content":"alice@example.com"`) {
+		t.Fatalf("expected content to be skipped (in skip_keys), got %s", got)
+	}
+	if !strings.Contains(got, `"custom_field":"[EMAIL_1]"`) {
+		t.Fatalf("expected custom_field to be sanitized, got %s", got)
+	}
+	if len(items) != 1 {
+		t.Fatalf("expected one sanitized item, got %+v", items)
+	}
+}
+
+func TestSanitizeJSONFieldsWithSanitizer_FallbackJSONAware(t *testing.T) {
+	s := New([]Detector{EmailDetector{}})
+	input := []byte(`{"messages":[{"role":"user","content":"contact alice@example.com"}],"token":"sk-Abcdefghij1234567890XYZ"}`)
+	out, items, err := sanitizeJSONFieldsWithSanitizer(input, s, DefaultKeyConfig())
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := string(out)
+	if !strings.Contains(got, `"content":"contact [EMAIL_1]"`) {
+		t.Fatalf("expected content to be sanitized, got %s", got)
+	}
+	if !strings.Contains(got, `"token":"sk-Abcdefghij1234567890XYZ"`) {
+		t.Fatalf("expected token to remain untouched, got %s", got)
+	}
+	if !strings.Contains(got, `"role":"user"`) {
+		t.Fatalf("expected role to remain untouched, got %s", got)
+	}
+	if len(items) != 1 {
+		t.Fatalf("expected one sanitized item, got %+v", items)
+	}
+}
+
+func TestSanitizeJSONFieldsWithSanitizer_NonJSONFallback(t *testing.T) {
+	s := New([]Detector{EmailDetector{}})
+	input := []byte("plain text alice@example.com")
+	_, _, err := sanitizeJSONFieldsWithSanitizer(input, s, DefaultKeyConfig())
+	if err == nil {
+		t.Fatal("expected error for non-JSON input")
 	}
 }
