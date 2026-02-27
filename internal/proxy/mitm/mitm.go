@@ -74,9 +74,10 @@ func (h *Handler) HandleMITM(clientConn net.Conn, host string) {
 	srv := &http.Server{
 		Handler:           h.serverHandler(host),
 		ReadHeaderTimeout: 10 * time.Second,
+		IdleTimeout:       120 * time.Second,
 		ErrorLog:          log.New(io.Writer(&errorLogger{host: host}), "", 0),
 	}
-	listener := &singleConnListener{conn: tlsClient}
+	listener := newSingleConnListener(tlsClient)
 	_ = srv.Serve(listener)
 	log.Printf("MITM: completed for %s", host)
 }
@@ -121,43 +122,15 @@ func (h *Handler) serverHandler(connectHost string) http.Handler {
 		req.RequestURI = ""
 		req.Host = connectHost
 
-		// Remove hop-by-hop headers that shouldn't be forwarded
-		req.Header.Del("Connection")
-		req.Header.Del("Keep-Alive")
-		req.Header.Del("Proxy-Authenticate")
-		req.Header.Del("Proxy-Authorization")
-		req.Header.Del("TE")
-		req.Header.Del("Trailers")
-		req.Header.Del("Transfer-Encoding")
-		req.Header.Del("Upgrade")
+		// Remove hop-by-hop headers that shouldn't be forwarded to upstream
+		removeHopByHopHeaders(req.Header)
 
-		// Ensure User-Agent is set to avoid Cloudflare challenges
-		if req.Header.Get("User-Agent") == "" {
-			req.Header.Set("User-Agent", "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
-		}
-
-		// Add browser-like headers to bypass Cloudflare challenges
-		if req.Header.Get("Accept") == "" {
-			req.Header.Set("Accept", "application/json, text/plain, */*")
-		}
-		if req.Header.Get("Accept-Language") == "" {
-			req.Header.Set("Accept-Language", "en-US,en;q=0.9")
-		}
-		if req.Header.Get("Accept-Encoding") == "" {
-			req.Header.Set("Accept-Encoding", "gzip, deflate, br")
-		}
-		if req.Header.Get("Referer") == "" {
-			req.Header.Set("Referer", "https://"+connectHost+"/")
-		}
-		if req.Header.Get("Sec-Fetch-Site") == "" {
-			req.Header.Set("Sec-Fetch-Site", "same-origin")
-		}
-		if req.Header.Get("Sec-Fetch-Mode") == "" {
-			req.Header.Set("Sec-Fetch-Mode", "cors")
-		}
-		if req.Header.Get("Sec-Fetch-Dest") == "" {
-			req.Header.Set("Sec-Fetch-Dest", "empty")
-		}
+		// Remove Accept-Encoding so that Go's http.Transport handles
+		// compression transparently (adds its own Accept-Encoding and
+		// decompresses the response automatically). If we set it manually,
+		// Transport skips auto-decompression and we'd forward compressed
+		// bytes that the client can't decode.
+		req.Header.Del("Accept-Encoding")
 
 		requestTrace.SanitizeStart = time.Now()
 		if !skipInspect {
@@ -413,22 +386,56 @@ type singleConnListener struct {
 	mu       sync.Mutex
 	conn     net.Conn
 	accepted bool
+	done     chan struct{}
+}
+
+func newSingleConnListener(conn net.Conn) *singleConnListener {
+	return &singleConnListener{conn: conn, done: make(chan struct{})}
 }
 
 func (l *singleConnListener) Accept() (net.Conn, error) {
 	l.mu.Lock()
-	defer l.mu.Unlock()
 	if l.accepted {
+		l.mu.Unlock()
+		// Block until the listener is closed instead of returning
+		// io.EOF immediately. This prevents http.Server from entering
+		// shutdown mode while keep-alive requests are still flowing.
+		<-l.done
 		return nil, io.EOF
 	}
 	l.accepted = true
-	return l.conn, nil
+	c := l.conn
+	l.mu.Unlock()
+	return c, nil
 }
 func (l *singleConnListener) Close() error {
+	select {
+	case <-l.done:
+	default:
+		close(l.done)
+	}
 	return nil
 }
 func (l *singleConnListener) Addr() net.Addr {
 	return &net.TCPAddr{IP: net.ParseIP("127.0.0.1"), Port: 0}
+}
+
+// removeHopByHopHeaders removes headers defined in RFC 2616 section 13.5.1
+// that must not be forwarded by proxies. Transfer-Encoding is intentionally
+// kept because removing it would break chunked request bodies.
+func removeHopByHopHeaders(h http.Header) {
+	// Remove headers listed in the Connection header first
+	for _, key := range h["Connection"] {
+		h.Del(key)
+	}
+	h.Del("Connection")
+	h.Del("Keep-Alive")
+	h.Del("Proxy-Authenticate")
+	h.Del("Proxy-Authorization")
+	h.Del("Proxy-Connection")
+	h.Del("TE")
+	h.Del("Trailer")
+	h.Del("Upgrade")
 }
 
 func normalizeHost(hostport string) string {
