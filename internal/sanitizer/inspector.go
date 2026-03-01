@@ -246,6 +246,11 @@ func (i *SanitizingInspector) InspectResponse(r *http.Response) (*http.Response,
 	if !isTextContent(contentType) && !streaming {
 		return r, nil
 	}
+	// Skip if response body is compressed — we cannot do text replacement
+	// on gzip/br/zstd encoded content. The browser will decompress it.
+	if ce := r.Header.Get("Content-Encoding"); ce != "" {
+		return r, nil
+	}
 	limit := i.maxBodySize
 	if limit <= 0 {
 		limit = defaultMaxBodyBytes

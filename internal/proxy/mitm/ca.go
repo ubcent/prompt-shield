@@ -8,6 +8,7 @@ import (
 	"crypto/x509/pkix"
 	"encoding/pem"
 	"fmt"
+	"log"
 	"math/big"
 	"net"
 	"os"
@@ -19,7 +20,7 @@ import (
 )
 
 const (
-	maxLeafLifetime = 24 * time.Hour
+	maxLeafLifetime = 7 * 24 * time.Hour
 )
 
 type CAStore struct {
@@ -62,7 +63,11 @@ func (c *CAStore) GetLeafCert(host string) (*tls.Certificate, error) {
 		return nil, err
 	}
 	if cert, ok := c.certPool[host]; ok {
-		return cert, nil
+		if !leafExpiringSoon(cert) {
+			return cert, nil
+		}
+		log.Printf("MITM: leaf cert for %s expired or expiring, regenerating", host)
+		delete(c.certPool, host)
 	}
 	cert, err := c.generateLeafCertLocked(host)
 	if err != nil {
@@ -70,6 +75,18 @@ func (c *CAStore) GetLeafCert(host string) (*tls.Certificate, error) {
 	}
 	c.certPool[host] = cert
 	return cert, nil
+}
+
+// leafExpiringSoon returns true if the leaf certificate expires within 1 hour.
+func leafExpiringSoon(cert *tls.Certificate) bool {
+	if cert == nil || len(cert.Certificate) == 0 {
+		return true
+	}
+	leaf, err := x509.ParseCertificate(cert.Certificate[0])
+	if err != nil {
+		return true
+	}
+	return time.Until(leaf.NotAfter) < time.Hour
 }
 
 func (c *CAStore) ensureRootCALocked() error {

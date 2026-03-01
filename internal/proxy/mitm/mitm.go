@@ -74,9 +74,11 @@ func (h *Handler) HandleMITM(clientConn net.Conn, host string) {
 	srv := &http.Server{
 		Handler:           h.serverHandler(host),
 		ReadHeaderTimeout: 10 * time.Second,
+		IdleTimeout:       120 * time.Second,
 		ErrorLog:          log.New(io.Writer(&errorLogger{host: host}), "", 0),
 	}
-	listener := &singleConnListener{conn: tlsClient}
+	listener := &singleConnListener{done: make(chan struct{})}
+	listener.conn = &notifyCloseConn{Conn: tlsClient, onClose: listener.Close}
 	_ = srv.Serve(listener)
 	log.Printf("MITM: completed for %s", host)
 }
@@ -183,6 +185,13 @@ func (h *Handler) serverHandler(connectHost string) http.Handler {
 			http.Error(w, err.Error(), http.StatusBadGateway)
 			return
 		}
+		if resp.StatusCode == http.StatusForbidden {
+			log.Printf("MITM: upstream 403 for %s %s%s (Cf-Mitigated: %s, Server: %s, Content-Type: %s)",
+				req.Method, host, req.URL.Path,
+				resp.Header.Get("Cf-Mitigated"),
+				resp.Header.Get("Server"),
+				resp.Header.Get("Content-Type"))
+		}
 		requestTrace.FirstByte = time.Now()
 		requestTrace.IsStreaming = isStreamingResponse(resp)
 		resp.Body = requestTrace.TrackingReadCloser(resp.Body, func() {
@@ -268,6 +277,11 @@ func (h *Handler) restoreResponse(resp *http.Response, sessionID string) *http.R
 
 	// Skip non-text content types
 	if !isTextContentType(contentType) {
+		return resp
+	}
+
+	// Skip compressed responses — cannot do text replacement on encoded content
+	if ce := resp.Header.Get("Content-Encoding"); ce != "" {
 		return resp
 	}
 
@@ -413,22 +427,54 @@ type singleConnListener struct {
 	mu       sync.Mutex
 	conn     net.Conn
 	accepted bool
+	done     chan struct{}
 }
 
 func (l *singleConnListener) Accept() (net.Conn, error) {
 	l.mu.Lock()
-	defer l.mu.Unlock()
 	if l.accepted {
+		l.mu.Unlock()
+		// Block until the connection is closed instead of returning
+		// io.EOF immediately. If we return io.EOF, http.Server.Serve
+		// exits and calls srv.Close() which kills the goroutine that
+		// is serving keep-alive requests on the accepted connection.
+		<-l.done
 		return nil, io.EOF
 	}
 	l.accepted = true
-	return l.conn, nil
+	c := l.conn
+	l.mu.Unlock()
+	return c, nil
 }
 func (l *singleConnListener) Close() error {
+	select {
+	case <-l.done:
+	default:
+		close(l.done)
+	}
 	return nil
 }
 func (l *singleConnListener) Addr() net.Addr {
 	return &net.TCPAddr{IP: net.ParseIP("127.0.0.1"), Port: 0}
+}
+
+// notifyCloseConn wraps a net.Conn and calls onClose when Close is called.
+// When http.Server closes the connection (idle timeout, client disconnect),
+// this triggers listener.Close() which unblocks Accept() and lets Serve return.
+type notifyCloseConn struct {
+	net.Conn
+	closeOnce sync.Once
+	onClose   func() error
+}
+
+func (c *notifyCloseConn) Close() error {
+	err := c.Conn.Close()
+	c.closeOnce.Do(func() {
+		if c.onClose != nil {
+			_ = c.onClose()
+		}
+	})
+	return err
 }
 
 func normalizeHost(hostport string) string {
